@@ -6,7 +6,7 @@ Reusable GitHub Actions workflows for Apple app distribution: **iPhone and iPad*
 
 Adding a new app means: dropping one `Config/products/<id>.json` per product in your repo, setting the team's secrets once (certificates + one App Store Connect key) plus two S3 vars, creating one provisioning profile per bundle ID in the developer portal, and copying four **trigger-only** shell workflows into `.github/workflows/` (they *discover* your products — no `products` input). No build/sign/notarize/upload code lives in the consumer repo, and no provisioning profile is ever stored in GitHub.
 
-> **v0.6.0 (breaking):** iOS joined (it used to live in `LeanBytes/workflows-ios`), the product file names its platforms, profiles come from App Store Connect, `distribute-beta.yml` became `distribute.yml`, and App Store builds no longer get tags. See [MIGRATING.md](MIGRATING.md) for every path from v0.3, v0.4, v0.5 and workflows-ios. Pin v0.6.3, never v0.6.0: until v0.6.1 (and v0.5.10), every tag checked out main's shared scripts instead of its own (#34), and until v0.6.2 (and v0.5.11) no Tuist install honored the app's pin (#39).
+> **v0.6.0 (breaking):** iOS joined (it used to live in `LeanBytes/workflows-ios`), the product file names its platforms, profiles come from App Store Connect, `distribute-beta.yml` became `distribute.yml`, and App Store builds no longer get tags. See [MIGRATING.md](MIGRATING.md) for every path from v0.3, v0.4, v0.5 and workflows-ios. Pin v0.6.4, never v0.6.0: until v0.6.1 (and v0.5.10), every tag checked out main's shared scripts instead of its own (#34), and until v0.6.2 (and v0.5.11) no Tuist install honored the app's pin (#39).
 
 ## Architecture
 
@@ -134,9 +134,10 @@ Leg fields (inside `platforms.<platform>.<channel>`):
 | `s3-subpath` | `direct` | S3 + appcast sub-prefix (e.g. `"pro"`; empty = the bucket root). |
 | `appcast-filename` / `appcast-seed-path` | `direct` | This product's Sparkle feed filename + seed (defaults `appcast.xml` / `Config/appcast.xml`). |
 | `changelog-filename` | `direct` | Name of the published `Changelog.json`. Give a second product at the **same** `s3-subpath` a distinct name (e.g. `Changelog-pro.json`). |
-| `cert-secret` / `cert-password-secret` | all | Name of another certificate p12 + password secret for this leg (e.g. a legacy team kept after an account transfer). Default: the team's own. A certificate of another team needs that team's key too (`asc-key`). |
+| `cert-secret` / `cert-password-secret` | all | Name of another certificate p12 + password secret for this leg (e.g. a legacy team kept after an account transfer). Default: the team's own. A certificate of another team needs that team's key too (`asc-key`), or, when that team no longer owns the App ID, `"profile": false`. |
 | `asc-key` | all | `"alt"`: this leg downloads its profiles, notarizes and uploads with `ASC_KEY_ID_ALT` / `ASC_ISSUER_ID_ALT` / `ASC_KEY_ALT_BASE64`, another team's key (a key sees only its own team's profiles). Without those secrets the leg gets no key, never the default one. |
 | `team` | all | The leg's Apple team ID, e.g. `"ABCDE12345"`. The build fails when the profiles belong to another team, and a `direct` leg also when its signed app does. Set it on every leg that signs outside the default team. |
+| `profile` | `direct` | `false` signs without a provisioning profile: the certificate and `team` alone, so `team` is required. For a Direct app that keeps an old team's certificate after an app transfer moved its App ID: neither team can issue a profile for it, and an app whose entitlements are all `com.apple.security.*` needs none. The build fails before export if a bundle claims any other entitlement, because macOS would refuse to launch it. Default `true`. |
 
 A key from the v0.5 format (`platform`, `build-app-store`, `scheme-store`, `has-finder`, `devid-profile-secret`, …) or from workflows-ios (`channel`, `profile-secret`, …) fails with a message naming what to use instead. Extensions need no key at all: every app and extension is signed with the profile for its own bundle ID.
 
@@ -150,6 +151,7 @@ CI never stores a profile. Every build job first downloads the team's **active**
 - **Renewal:** regenerate the profile in the portal; the next build uses it.
 - **The key must be allowed to read profiles.** The profile endpoints need an **Admin** App Store Connect key; a weaker key fails the first build step with `App Store Connect answered 403` and says so.
 - A bundle with several active profiles of a type uses a hand-made one before an Xcode-managed one, then the latest expiry.
+- **A Direct app that needs no profile** can sign without one: `"profile": false` on its leg (see the leg table).
 
 The download runs before any of the app's code (Tuist, SwiftPM plugins, the pre-build script), and the profiles it installed are removed again at the end of the job.
 
@@ -234,7 +236,7 @@ Copy from [`examples/per-app/`](examples/per-app/) — the same files serve ever
 - `distribute-release.yml` — your version tag.
 - `distribute-alpha.yml` — by hand, from any branch.
 
-Pin the `uses:` line to a tag (`@v0.6.3`), not `@main`. Uncomment per-app inputs as needed.
+Pin the `uses:` line to a tag (`@v0.6.4`), not `@main`. Uncomment per-app inputs as needed.
 
 **On secret passing.** GitHub Actions' `secrets: inherit` only crosses repository boundaries *within the same org/enterprise*, and it hands the shared workflow every secret the repo can see. The example shells list each secret explicitly, which works in every configuration and passes only what is used. Keep that block as-is.
 
@@ -300,7 +302,7 @@ The cache step runs first (restores the file if previously cached under that key
 
 ## Migrating
 
-[MIGRATING.md](MIGRATING.md) takes an app to v0.6.3 from v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
+[MIGRATING.md](MIGRATING.md) takes an app to v0.6.4 from v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
 
 - every retired product-file key and shell input, with its replacement
 - before and after files for a Direct + App Store app with extensions
@@ -309,6 +311,7 @@ The cache step runs first (restores the file if previously cached under that key
 - how an App Store build now reaches review
 - a one-line fix for apps still pinned to v0.5.9 or older
 - the `mise.toml` pin a Tuist app needs
+- a Direct app that keeps an old team's certificate after its App ID moved to another team
 
 ## Local builds (no CI)
 
@@ -390,7 +393,7 @@ Results render on the **run page** via `$GITHUB_STEP_SUMMARY` (per-runner pass/f
 Pin caller `uses:` to a tag, not `@main`:
 
 ```yaml
-uses: LeanBytes/workflows-macos/.github/workflows/distribute.yml@v0.6.3
+uses: LeanBytes/workflows-macos/.github/workflows/distribute.yml@v0.6.4
 ```
 
 Patch versions are the usual working unit — every workflow change ships under a new tag, and cross-callouts inside this repo plus `examples/per-app/` are bumped to that tag as part of the same commit. **`v0.6.0` is a breaking change** (see [Migrating](MIGRATING.md)); so was `v0.4.0`, which moved product identity + changelog into `Config/products/<id>.json`.

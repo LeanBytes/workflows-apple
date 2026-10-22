@@ -14,7 +14,9 @@
 # Provisioning profiles come from App Store Connect: the first step downloads
 # every Developer ID profile of the team, and the app and each of its
 # extensions are signed with the profile for their own bundle ID. No profile
-# is stored in GitHub and none is named anywhere.
+# is stored in GitHub and none is named anywhere. With `profile: false` there
+# is none at all: the certificate and `team` sign alone, and the build fails
+# when a bundle claims an entitlement outside com.apple.security.* (#43).
 #
 # Each secret reaches only the steps that use it: the certificate the signing
 # step, the App Store Connect key the profile and notarization steps.
@@ -27,7 +29,8 @@
 #   DEVELOPER_ID_PASSWORD    — password for the Developer ID p12
 #   KEYCHAIN_PASSWORD        — ephemeral build keychain password
 #   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_BASE64  — App Store Connect API key:
-#                              downloads the profiles, notarizes the app
+#                              downloads the profiles, notarizes the app (with
+#                              profile: false, it only notarizes)
 #
 # Required caller inputs (identity comes from the caller's product list):
 #   scheme-name, product-name
@@ -68,6 +71,10 @@ on:
         description: "The leg's Apple team ID (product file 'team'). Profiles from another team fail the build: the leg got another team's App Store Connect key. Empty = no check."
         type: string
         default: ""
+      profile:
+        description: "Sign with a Developer ID profile from App Store Connect (product file 'profile'). false signs with the certificate and 'team' alone, for an app whose entitlements are all com.apple.security.*, e.g. one that keeps an old team's certificate after its App ID moved to another team."
+        type: boolean
+        default: true
       artifact-name:
         description: "GH Actions artifact name for the DMG+ZIP upload. Suffix per leg to avoid matrix collisions."
         type: string
@@ -176,6 +183,7 @@ jobs:
       USE_TUIST: ${{ inputs.use-tuist }}
       CONFIGURATION: ${{ inputs.configuration }}
       TEAM: ${{ inputs.team }}
+      PROFILE: ${{ inputs.profile }}
       EXTRA_ARGS: ${{ inputs.extra-xcodebuild-args }}
       WORK_DIR: /tmp/build/_work
       OUTPUT_DIR: /tmp/build

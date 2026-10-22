@@ -225,10 +225,25 @@ chk_invalid "asc-key names the ALT key or nothing"   '{"ios": {"app-store": {"as
 chk_invalid "team is an Apple team ID"               '{"ios": {"app-store": {"team": "LeanBytes"}}}' "'team' is a 10-character Apple team ID"
 chk_invalid "team on the product would check nothing" '{"ios": {"app-store": {}}}' "'team' belongs on the leg that signs in that team" '"team": "ABCDE12345",'
 chk_invalid "asc-key on the product would switch nothing" '{"ios": {"app-store": {}}}' "'asc-key' belongs on the leg" '"asc-key": "alt",'
+chk_invalid "only a direct leg signs without a profile" '{"ios": {"app-store": {"profile": false}}}' "'profile' belongs on a direct leg; App Store and Ad Hoc builds always need a profile"
+chk_invalid "a Mac App Store leg needs its profile too" '{"macos": {"app-store": {"profile": false}}}' "'profile' belongs on a direct leg"
+chk_invalid "no profile, so the leg names its team" '{"macos": {"direct": {"profile": false}}}' '"profile": false needs "team"' '"product-name": "X",'
 d=$(mktemp -d); printf '{"id":"x","scheme":"X","bundle-id":"b","changelog":{"versions":[{"version":"1.0.0"}]}}' > "$d/x.json"
 CAP PRODUCTS_DIR="$d" python3 "$PY" discover
 err "no platforms block" "'platforms' is missing"
 rm -rf "$d"
+
+echo "== a direct leg without a profile (#43) =="
+# An app that keeps an old team's certificate after its App ID moved can't get a
+# profile from either team, and needs none if its entitlements are all
+# com.apple.security.* (profiles.py checks that at export; see its selftest).
+d=$(mkprod '{"macos": {"direct": {"profile": false, "team": "ABCDE12345"}, "app-store": {}}}' '"product-name": "X",')
+CAP PRODUCTS_DIR="$d" python3 "$PY" discover
+jok "the direct leg carries profile false and its team; every other leg keeps a profile" \
+  'l = L(); assert (l["x-macos-direct"]["profile"], l["x-macos-direct"]["team"]) == (False, "ABCDE12345"), l; assert l["x-macos-app-store"]["profile"] is True, l'
+rm -rf "$d"
+CAP PRODUCTS_DIR="$MULTI" python3 "$PY" discover
+jok "a leg without the key signs with a profile, as before" 'assert all(x["profile"] is True for x in L().values()), L()'
 
 echo "== source-paths and real git: what counts as a change =="
 # Real git repos, real `git diff` — ASSUME_CHANGED is deliberately NOT set, so
@@ -398,13 +413,15 @@ for f in ("distribute-alpha.yml", "distribute.yml", "distribute-release.yml"):
                 bad.append(f"{f}:{jname}: {name} is not the leg's own key")
         if job["with"].get("team") != "${{ matrix.leg.team }}":
             bad.append(f"{f}:{jname}: does not pass the leg's team")
+        if "/_build-mac-direct.yml@" in job["uses"] and job["with"].get("profile") != "${{ matrix.leg.profile }}":
+            bad.append(f"{f}:{jname}: does not pass the leg's profile choice (#43)")
     text = open(p).read()
     if "altool --upload-app" in text and '--apiKey "$KEY" --apiIssuer "$ISSUER"' not in text:
         bad.append(f"{f}: the TestFlight upload does not use the leg's key")
 for b in bad:
     print(f"  FAIL: {b}")
 if not bad:
-    print(f"  ok  : all {calls} build calls and both uploads use each leg's own key; every build gets the leg's team")
+    print(f"  ok  : all {calls} build calls and both uploads use each leg's own key; every build gets the leg's team, every Direct build its profile choice")
 sys.exit(1 if bad else 0)
 PYASC
 
@@ -413,9 +430,10 @@ echo "== profiles: from App Store Connect, before any app code, nowhere in GitHu
 grep -rln 'PROV_PROF_' "$W" "$ROOT/examples" \
   && { echo "  FAIL: a PROV_PROF_* secret is still declared or passed — profiles come from App Store Connect"; FAIL=1; } \
   || pass "no PROV_PROF_* secret anywhere"
-grep -rq 'PROVISIONING_PROFILE_SPECIFIER=[^$]' "$W" "$ROOT/.github/scripts" \
+# The one exception is empty: a Direct leg without a profile (#43) signs every target with none.
+grep -rh 'PROVISIONING_PROFILE_SPECIFIER=[^$]' "$W" "$ROOT/.github/scripts" | grep -vF '"PROVISIONING_PROFILE_SPECIFIER="' >/dev/null \
   && { echo "  FAIL: a literal PROVISIONING_PROFILE_SPECIFIER signs every target with one profile"; FAIL=1; } \
-  || pass "no literal PROVISIONING_PROFILE_SPECIFIER (each target looks up its own)"
+  || pass "no literal PROVISIONING_PROFILE_SPECIFIER (each target looks up its own, or a leg without a profile sets it empty)"
 # Step order: the download must come before Tuist, SwiftPM resolution and the
 # pre-build script, so no app code ever runs next to the App Store Connect key.
 python3 - "$W" <<'PYO' || FAIL=1

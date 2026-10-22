@@ -32,7 +32,9 @@ ad-hoc leg and the S3/Sparkle settings on a direct leg. An empty object means
 the product's defaults. A leg that signs in another Apple team than the rest
 names that team's certificate (`cert-secret`, `cert-password-secret`) and App
 Store Connect key (`"asc-key": "alt"`); `team` makes the build fail when the
-profiles come from any other team.
+profiles come from any other team. A direct leg whose entitlements are all
+com.apple.security.* may sign without a profile: `"profile": false` with its
+`team` (an app that keeps an old team's certificate after its App ID moved).
 
 Subcommands:
   discover       Every leg of every product (the PR compile fan-out).
@@ -97,7 +99,7 @@ NOT_YET = ("tvos", "visionos")
 
 LEG_KEYS = {"scheme", "bundle-id", "configuration", "product-name", "cert-secret", "cert-password-secret",
             "asc-key", "team"}
-DIRECT_KEYS = {"appcast", "s3-subpath", "appcast-filename", "appcast-seed-path", "changelog-filename"}
+DIRECT_KEYS = {"appcast", "s3-subpath", "appcast-filename", "appcast-seed-path", "changelog-filename", "profile"}
 
 _EXT = "delete it: every extension is signed with the profile for its own bundle ID"
 _PROFILE = "delete it: profiles come from App Store Connect at build time"
@@ -248,7 +250,9 @@ def resolve_legs(pid, p, errors):
             for k in leg:
                 if k in allowed:
                     continue
-                if k in DIRECT_KEYS:
+                if k == "profile":
+                    errors.append(f"{where}: 'profile' belongs on a direct leg; App Store and Ad Hoc builds always need a profile")
+                elif k in DIRECT_KEYS:
                     errors.append(f"{where}: '{k}' belongs on a direct leg")
                 elif k == "distribute":
                     errors.append(f"{where}: a direct leg always publishes; 'distribute' is for app-store and ad-hoc legs")
@@ -271,6 +275,9 @@ def resolve_legs(pid, p, errors):
             team = str(leg.get("team") or "").strip()
             if team and not re.fullmatch(r"[A-Z0-9]{10}", team):
                 errors.append(f"{where}: 'team' is a 10-character Apple team ID such as \"ABCDE12345\", not '{team}'")
+            profile = as_bool(leg.get("profile"), True)
+            if chan == "direct" and not profile and not team:
+                errors.append(f"{where}: \"profile\": false needs \"team\": without a profile nothing else names the team the leg signs in")
 
             kind = LEG_KINDS[(plat, chan)]
             legs.append({
@@ -290,6 +297,7 @@ def resolve_legs(pid, p, errors):
                 "cert-password-secret": str(leg.get("cert-password-secret") or ""),
                 "asc-key": asc_key,
                 "team": team,
+                "profile": profile,
                 "appcast": as_bool(leg.get("appcast"), False),
                 "s3-subpath": str(leg.get("s3-subpath") or "").strip("/"),
                 "appcast-filename": str(leg.get("appcast-filename") or "appcast.xml"),

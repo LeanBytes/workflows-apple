@@ -18,6 +18,7 @@
 # in-memory state from a previous one. Paths are pure functions of the env.
 # The `profiles` phase downloads the team's Developer ID profiles from App Store
 # Connect into WORK_DIR/profiles; archive and export read them back from there.
+# With PROFILE=false there are none: the certificate and TEAM sign alone (#43).
 #
 # Usage:
 #   build-direct.sh <phase>     # run a single phase (CI: one per workflow step)
@@ -50,6 +51,9 @@
 # Optional env:
 #   USE_TUIST=true|false (default false)   CONFIGURATION (default Release)
 #   TEAM (the leg's Apple team ID; profiles or a signature from another team fail)
+#   PROFILE=true|false (default true; false signs without a profile and needs
+#     TEAM. Only for an app that claims no entitlement outside
+#     com.apple.security.*: export checks that first)
 #   EXTRA_ARGS (extra xcodebuild settings; word-split intentionally — unquoted)
 #   PRE_BUILD_SCRIPT (bash script run in `setup`; CI also runs it as a native step)
 #   POST_BUILD_SCRIPT (bash script run in `post-build`, called with the archived
@@ -73,6 +77,9 @@ set -euo pipefail
 USE_TUIST="${USE_TUIST:-false}"
 CONFIGURATION="${CONFIGURATION:-Release}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+PROFILE="${PROFILE:-true}"
+# Unquoted where used, like EXTRA_ARGS: empty for a leg with a profile.
+NO_PROFILE=""; [ "$PROFILE" != "false" ] || NO_PROFILE="--no-profile"
 # profiles.py sits next to this script in both callers (.shared-ci/ in CI).
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -128,13 +135,18 @@ restore_keychains() {
 # ── Phases ───────────────────────────────────────────────────────────────────
 phase_profiles() {
   banner "Provisioning profiles"
-  : "${ASC_KEY_ID:?}"; : "${ASC_ISSUER_ID:?}"; : "${ASC_KEY_BASE64:?}"
   # Start from a clean work dir. Self-hosted runners persist state between jobs;
   # WORK_DIR holds our ephemeral DerivedData (see compute_paths), so wiping it
   # here guarantees a cold, hosted-runner-equivalent build even if a prior run's
   # phase_cleanup didn't execute (e.g. a hard-cancelled job). profiles is always
   # the first phase, so this never clobbers state written by later phases.
   rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR"
+  if [ "$PROFILE" = "false" ]; then
+    : "${TEAM:?PROFILE=false needs TEAM: without a profile nothing else names the team}"
+    echo "No profile: this leg signs with its certificate and team $TEAM alone (\"profile\": false)."
+    return 0
+  fi
+  : "${ASC_KEY_ID:?}"; : "${ASC_ISSUER_ID:?}"; : "${ASC_KEY_BASE64:?}"
   # Every Developer ID profile the team has. Archive and export match them to
   # the app and each extension by bundle ID, so no profile is named anywhere.
   # Runs before any of the app's code does.
@@ -221,12 +233,12 @@ phase_archive() {
   banner "Archive"
   : "${SCHEME_NAME:?}"; : "${VERSION:?}"; : "${BUILD_NUMBER:?}"
   rm -rf "$ARCHIVE"
-  # Each target signs with the profile for its own bundle ID (see profiles.py
-  # archive-args). Read line by line: a setting may contain spaces.
+  # Each target signs with the profile for its own bundle ID, or with none at all
+  # (see profiles.py archive-args). Read line by line: a setting may contain spaces.
   local sign=() a
   while IFS= read -r a; do sign+=("$a"); done < <(python3 "$SCRIPTS/profiles.py" archive-args \
     --profiles "$PROFILES/profiles.json" --type MAC_APP_DIRECT --cert "Developer ID Application" \
-    --team "${TEAM:-}")
+    --team "${TEAM:-}" $NO_PROFILE)
   [ "${#sign[@]}" -gt 0 ] || { echo "::error::no signing settings — did the 'profiles' phase run?" >&2; exit 1; }
   # EXTRA_ARGS is intentionally UNQUOTED so it word-splits into separate
   # xcodebuild build-setting args (e.g. BUILD_RELEASE_DATE=...). Do not quote.
@@ -264,10 +276,12 @@ phase_export() {
   banner "Export"
   # Every app and extension in the archive gets the profile for its bundle ID.
   # Printed so a bundle-id ↔ profile mismatch is obvious in the log (not secret —
-  # just bundle ids and profile names).
+  # just bundle ids and profile names). Without a profile, each bundle's
+  # entitlements are printed and checked instead: macOS won't launch one that
+  # claims an entitlement only a profile grants.
   python3 "$SCRIPTS/profiles.py" export-options --profiles "$PROFILES/profiles.json" \
     --type MAC_APP_DIRECT --archive "$ARCHIVE" --method developer-id \
-    --cert "Developer ID Application" --team "${TEAM:-}" --out "$WORK_DIR/ExportOptions.plist"
+    --cert "Developer ID Application" --team "${TEAM:-}" $NO_PROFILE --out "$WORK_DIR/ExportOptions.plist"
 
   rm -rf "$EXPORT_DIR"
   xcodebuild -exportArchive \
@@ -333,6 +347,10 @@ phase_verify() {
     signed=$(codesign -dv "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
     [ "$signed" = "$TEAM" ] || { echo "::error::$APP is signed by team ${signed:-<none>}, but the leg signs for team $TEAM" >&2; exit 1; }
     echo "Signed by team $signed, as the leg states."
+  fi
+  if [ "$PROFILE" = "false" ]; then
+    [ ! -e "$APP/Contents/embedded.provisionprofile" ] || { echo "::error::$APP carries a provisioning profile, but the leg signs without one" >&2; exit 1; }
+    echo "No embedded.provisionprofile, as the leg states."
   fi
 }
 

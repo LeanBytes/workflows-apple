@@ -26,9 +26,14 @@
   another team's App Store Connect key. A profile accepts only its own team's
   certificates, so the signature can't end up in another team either.
 
+  With --no-profile (a Direct leg with "profile": false), both sign with the
+  certificate and --team alone, and export-options first fails when a bundle in
+  the archive claims an entitlement outside com.apple.security.*.
+
   profiles.py selftest
-      Offline check of the token signature, the profile choice, the install and
-      the archive matching.
+      Offline check of the token signature, the profile choice, the install, the
+      archive matching and the entitlement check (that one reads real signatures
+      only where codesign exists).
 
 Prints names, bundle IDs and dates only, never a token or a profile's content:
 an Ad Hoc profile lists device IDs.
@@ -222,14 +227,18 @@ def archive_args(args):
     # not names: a renewed profile can share its name with the old one.
     # (A placeholder signature can't replace this: on Xcode 27.1 an iOS target with
     # any entitlement refuses to archive without a profile.)
-    profiles = {b: p for b, p in json.loads(Path(args.profiles).read_text()).get(args.type, {}).items() if b != "?"}
-    if not profiles:
-        sys.exit(f"profiles: no active {args.type} profile for this team; create one per bundle ID in the developer portal")
-    same_team(args, profiles.values())
-    team = next(iter(profiles.values()))["team"]
-    print("\n".join(["CODE_SIGN_STYLE=Manual", f"DEVELOPMENT_TEAM={team}", f"CODE_SIGN_IDENTITY={args.cert}",
-                     "PROVISIONING_PROFILE_SPECIFIER=$(PP_$(PRODUCT_BUNDLE_IDENTIFIER:c99extidentifier))"]
-                    + [f"PP_{c99(b)}={p['uuid']}" for b, p in sorted(profiles.items())]))
+    if args.no_profile:
+        # The empty specifier overrides one the project may set (#43).
+        team, sign = args.team, ["PROVISIONING_PROFILE_SPECIFIER="]
+    else:
+        profiles = {b: p for b, p in json.loads(Path(args.profiles).read_text()).get(args.type, {}).items() if b != "?"}
+        if not profiles:
+            sys.exit(f"profiles: no active {args.type} profile for this team; create one per bundle ID in the developer portal")
+        same_team(args, profiles.values())
+        team = next(iter(profiles.values()))["team"]
+        sign = (["PROVISIONING_PROFILE_SPECIFIER=$(PP_$(PRODUCT_BUNDLE_IDENTIFIER:c99extidentifier))"]
+                + [f"PP_{c99(b)}={p['uuid']}" for b, p in sorted(profiles.items())])
+    print("\n".join(["CODE_SIGN_STYLE=Manual", f"DEVELOPMENT_TEAM={team}", f"CODE_SIGN_IDENTITY={args.cert}"] + sign))
 
 
 def bundles_in(archive):
@@ -243,23 +252,59 @@ def bundles_in(archive):
     return found
 
 
+def restricted(entitlements):
+    """The entitlements only a profile can grant. TN3125: a Mac program that claims
+    nothing outside com.apple.security.* (App Sandbox, Hardened Runtime) needs none."""
+    return sorted(k for k in entitlements if not k.startswith("com.apple.security."))
+
+
+def unrestricted_only(archive):
+    """Without a profile, macOS refuses to launch code that claims a restricted
+    entitlement, and notarization doesn't notice. So every bundle in the archive,
+    those inside frameworks too, must claim com.apple.security.* only (#43)."""
+    # ponytail: bundles only; a bare helper tool with its own entitlements isn't
+    # read. Walk every Mach-O if an app ever ships one.
+    apps = Path(archive) / "Products" / "Applications"
+    bad = []
+    for b in sorted(apps.rglob("*")):
+        if b.suffix not in (".app", ".appex", ".xpc") or not b.is_dir() or b.is_symlink():
+            continue
+        rel = str(b.relative_to(apps))
+        # A failed read must fail the build: read as "no entitlements", it would pass anything.
+        r = subprocess.run(["codesign", "-d", "--entitlements", "-", "--xml", str(b)], capture_output=True)
+        if r.returncode:
+            sys.exit(f"profiles: can't read the entitlements of {rel}: {r.stderr.decode().strip()}")
+        need = restricted(plistlib.loads(r.stdout) if r.stdout.strip() else {})
+        bad += [f"{rel}: {k}" for k in need]
+        print(f"{rel:60} {', '.join(need) if need else 'nothing that needs a profile'}")
+    if bad:
+        sys.exit("profiles: without a profile, macOS refuses to launch code that claims these entitlements: "
+                 + "; ".join(bad) + '. Remove them, or sign the leg with a profile (drop "profile": false)')
+
+
 def export_options(args):
-    profiles = json.loads(Path(args.profiles).read_text()).get(args.type, {})
-    mapping, used, team = {}, [], ""
-    for i, (path, bundle) in enumerate(bundles_in(args.archive)):
-        p = profiles.get(bundle)
-        if p:
-            mapping[bundle] = p["uuid"]  # the UUID, not the name: names aren't unique
-            used.append(p)
-            team = team or p["team"]
-            print(f"{path.name:32} {bundle:40} {p['name']}")
-        elif i == 0:
-            sys.exit(f"profiles: no active {args.type} profile for {bundle}; create it once in the developer portal")
-        else:
-            print(f"{path.name:32} {bundle:40} no {args.type} profile (export fails if it needs one)")
-    same_team(args, used)
+    mapping, team = {}, args.team
+    if args.no_profile:
+        unrestricted_only(args.archive)
+    else:
+        profiles = json.loads(Path(args.profiles).read_text()).get(args.type, {})
+        used, team = [], ""
+        for i, (path, bundle) in enumerate(bundles_in(args.archive)):
+            p = profiles.get(bundle)
+            if p:
+                mapping[bundle] = p["uuid"]  # the UUID, not the name: names aren't unique
+                used.append(p)
+                team = team or p["team"]
+                print(f"{path.name:32} {bundle:40} {p['name']}")
+            elif i == 0:
+                sys.exit(f"profiles: no active {args.type} profile for {bundle}; create it once in the developer portal")
+            else:
+                print(f"{path.name:32} {bundle:40} no {args.type} profile (export fails if it needs one)")
+        same_team(args, used)
     opts = {"method": args.method, "destination": "export", "signingStyle": "manual",
-            "teamID": team, "signingCertificate": args.cert, "provisioningProfiles": mapping}
+            "teamID": team, "signingCertificate": args.cert}
+    if mapping:
+        opts["provisioningProfiles"] = mapping
     if args.installer_cert:
         opts["installerSigningCertificate"] = args.installer_cert
     if args.method == "app-store-connect":
@@ -277,6 +322,7 @@ def export_options(args):
 def selftest(_):
     import contextlib
     import io
+    import shutil
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         key = d / "AuthKey_TEST.p8"
@@ -338,7 +384,7 @@ def selftest(_):
         def opts(**kw):
             ns = dict(profiles=d / "p.json", type="IOS_APP_STORE", archive=d / "t.xcarchive",
                       method="app-store-connect", cert="Apple Distribution", installer_cert=None,
-                      internal_only=False, team="", out=d / "o.plist")
+                      internal_only=False, team="", no_profile=False, out=d / "o.plist")
             ns.update(kw)
             with contextlib.redirect_stdout(io.StringIO()):
                 export_options(argparse.Namespace(**ns))
@@ -356,7 +402,7 @@ def selftest(_):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 archive_args(argparse.Namespace(**{**dict(profiles=d / "p.json", type="IOS_APP_STORE",
-                                                          cert="Apple Distribution", team=""), **kw}))
+                                                          cert="Apple Distribution", team="", no_profile=False), **kw}))
             return buf.getvalue().splitlines()
         assert args() == [
             "CODE_SIGN_STYLE=Manual", "DEVELOPMENT_TEAM=TEAM1", "CODE_SIGN_IDENTITY=Apple Distribution",
@@ -377,7 +423,47 @@ def selftest(_):
                 assert want in str(e), e
             else:
                 raise AssertionError(f"no failure: {want}")
-    print("selftest ok")
+
+        # "profile": false (#43): the certificate and the leg's team alone, and only
+        # entitlements that need no profile.
+        assert args(no_profile=True, team="TEAM9", cert="Developer ID Application") == [
+            "CODE_SIGN_STYLE=Manual", "DEVELOPMENT_TEAM=TEAM9", "CODE_SIGN_IDENTITY=Developer ID Application",
+            "PROVISIONING_PROFILE_SPECIFIER="], args(no_profile=True, team="TEAM9")
+        assert restricted({"com.apple.security.app-sandbox": True, "keychain-access-groups": ["TEAM9.n"],
+                           "com.apple.security.temporary-exception.mach-lookup.global-name": ["n-spks"],
+                           "com.apple.application-identifier": "TEAM9.n"}) == [
+            "com.apple.application-identifier", "keychain-access-groups"]
+        (d / "e.xcarchive/Products/Applications").mkdir(parents=True)  # no bundle to read: runs without codesign
+        o = opts(archive=d / "e.xcarchive", no_profile=True, team="TEAM9", method="developer-id",
+                 cert="Developer ID Application")
+        assert "provisioningProfiles" not in o and (o["teamID"], o["signingStyle"]) == ("TEAM9", "manual"), o
+        read = "entitlement rule only: no codesign here"
+        if shutil.which("codesign"):
+            # Real signatures: ad-hoc signed bundles around a copy of /usr/bin/true.
+            def bundle(path, entitlements):
+                (path / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
+                shutil.copy("/usr/bin/true", path / "Contents/MacOS" / path.stem)
+                (path / "Contents/Info.plist").write_bytes(plistlib.dumps(
+                    {"CFBundleIdentifier": f"com.n.{path.stem}", "CFBundleExecutable": path.stem}))
+                (d / "e.plist").write_bytes(plistlib.dumps(entitlements))
+                subprocess.run(["codesign", "-s", "-", "-f", "--entitlements", d / "e.plist", path],
+                               check=True, capture_output=True)
+            n = d / "n.xcarchive/Products/Applications/N.app"
+            helper = n / "Contents/Library/LoginItems/H.app"
+            bundle(helper, {})
+            bundle(n, {"com.apple.security.app-sandbox": True,
+                       "com.apple.security.temporary-exception.mach-lookup.global-name": ["com.n.N-spks"]})
+            assert "provisioningProfiles" not in opts(archive=d / "n.xcarchive", no_profile=True, team="TEAM9",
+                                                      method="developer-id")
+            bundle(helper, {"com.apple.security.app-sandbox": True, "keychain-access-groups": ["TEAM9.com.n.H"]})
+            try:
+                opts(archive=d / "n.xcarchive", no_profile=True, team="TEAM9", method="developer-id")
+            except SystemExit as e:
+                assert "N.app/Contents/Library/LoginItems/H.app: keychain-access-groups" in str(e), e
+            else:
+                raise AssertionError("a restricted entitlement passed without a profile")
+            read = "entitlements read with codesign"
+    print(f"selftest ok ({read})")
 
 
 def main():
@@ -395,6 +481,7 @@ def main():
     for name in ("--profiles", "--type", "--cert"):
         a.add_argument(name, required=True)
     a.add_argument("--team", default="", help="the leg's Apple team ID; profiles of another team fail")
+    a.add_argument("--no-profile", action="store_true", help="sign with the certificate and --team alone")
     a.set_defaults(run=archive_args)
     e = sub.add_parser("export-options")
     for name in ("--profiles", "--type", "--archive", "--method", "--cert", "--out"):
@@ -402,6 +489,8 @@ def main():
     e.add_argument("--installer-cert")
     e.add_argument("--internal-only", default="false", help="true marks an App Store build internal-only")
     e.add_argument("--team", default="", help="the leg's Apple team ID; profiles of another team fail")
+    e.add_argument("--no-profile", action="store_true",
+                   help="no profiles; fails when a bundle claims an entitlement outside com.apple.security.*")
     e.set_defaults(run=export_options)
     sub.add_parser("selftest").set_defaults(run=selftest)
     args = ap.parse_args()
