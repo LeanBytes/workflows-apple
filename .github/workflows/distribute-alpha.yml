@@ -27,7 +27,7 @@
 #     workflow_dispatch:
 #   jobs:
 #     alpha:
-#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-alpha.yml@v0.6.5
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-alpha.yml@v0.6.6
 #       secrets:
 #         # … the same block as distribute.yml, minus Sparkle and Jira
 # ─────────────────────────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.ios-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.5
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.6
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -204,6 +204,7 @@ jobs:
       artifact-name: ios-build-${{ matrix.leg.leg }}
       scheme: ${{ matrix.leg.scheme }}
       configuration: ${{ matrix.leg.configuration }}
+      destination: ${{ matrix.leg.destination }}
       team: ${{ matrix.leg.team }}
       profile-type: ${{ matrix.leg.profile-type }}
       export-method: ${{ matrix.leg.export-method }}
@@ -232,7 +233,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-store-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.5
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.6
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -270,7 +271,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-direct-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.5
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.6
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -365,11 +366,10 @@ jobs:
           set -euo pipefail
           python3 - "$LEGS_JSON" > /tmp/legs.tsv <<'PY'
           import json, sys
-          KIND = {("ios", "app-store"): "ios", ("ios", "ad-hoc"): "ios",
-                  ("macos", "app-store"): "mac-store", ("macos", "direct"): "mac-direct"}
-          fields = ["leg", "id", "product-name", "platform", "channel", "distribute", "bundle-id", "s3-subpath"]
+          # kind = the leg's build callee, which names its artifact folder.
+          fields = ["leg", "id", "product-name", "platform", "channel", "distribute", "bundle-id", "s3-subpath", "build"]
           for l in json.loads(sys.argv[1]):
-              print("\x1f".join([str(l.get(k, "")) for k in fields] + [KIND[(l["platform"], l["channel"])]]))
+              print("\x1f".join(str(l.get(k, "")) for k in fields))
           PY
           echo "Legs:"; tr '\037' '\t' < /tmp/legs.tsv
 
@@ -417,7 +417,7 @@ jobs:
             if [ -z "$KEY" ]; then
               echo "::error::No App Store Connect key for leg $leg"; echo "::endgroup::"; exit 1
             fi
-            if [ "$plat" = "ios" ]; then ext=ipa; type=ios; else ext=pkg; type=macos; fi
+            case "$plat" in ios) ext=ipa; type=ios ;; tvos) ext=ipa; type=appletvos ;; *) ext=pkg; type=macos ;; esac
             FILE=$(ls ./artifacts/$kind/$kind-build-$leg/*.$ext 2>/dev/null | head -1 || true)
             if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
               echo "::error::No .$ext for leg $leg"; echo "::endgroup::"; exit 1

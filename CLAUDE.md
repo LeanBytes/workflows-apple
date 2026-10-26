@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository purpose
 
-The **canonical shared CI/CD workflows for every LeanBytes and sarensw Apple app** — iPhone/iPad (App Store via TestFlight, Ad Hoc) and Mac (Developer ID Direct with Sparkle, Mac App Store via TestFlight). Each app repo carries four tiny trigger-only shells that call the orchestrators here via `uses: LeanBytes/workflows-apple/.github/workflows/<orchestrator>.yml@<tag>`.
+The **canonical shared CI/CD workflows for every LeanBytes and sarensw Apple app** — iPhone/iPad (App Store via TestFlight, Ad Hoc), Apple TV (App Store via TestFlight) and Mac (Developer ID Direct with Sparkle, Mac App Store via TestFlight). Each app repo carries four tiny trigger-only shells that call the orchestrators here via `uses: LeanBytes/workflows-apple/.github/workflows/<orchestrator>.yml@<tag>`.
 
 **v0.6.0 folded `LeanBytes/workflows-ios` back in** (issue #32). workflows-ios was a fork cut down to iOS; it gets only blocking fixes until its last app has moved, then it is archived.
 
@@ -35,6 +35,7 @@ Each product is one self-contained **`Config/products/<id>.json`**: identity (`s
 |---|---|---|---|---|
 | `ios` / `app-store` | `_build-ios.yml` | `IOS_APP_STORE` | `app-store-connect` | `.ipa` → `altool --type ios` |
 | `ios` / `ad-hoc` | `_build-ios.yml` | `IOS_APP_ADHOC` | `release-testing` | `.ipa` + manifest on S3 (`<dist>/<bundle-id>/app.ipa`, stable link) |
+| `tvos` / `app-store` | `_build-ios.yml` | `TVOS_APP_STORE` | `app-store-connect` | `.ipa` → `altool --type appletvos` |
 | `macos` / `app-store` | `_build-mac-store.yml` | `MAC_APP_STORE` | `app-store-connect` (+ installer cert) | `.pkg` → `altool --type macos` |
 | `macos` / `direct` | `_build-mac-direct.yml` | `MAC_APP_DIRECT` | `developer-id` | notarized DMG + ZIP on S3, Sparkle |
 
@@ -64,7 +65,7 @@ A leg object overrides `scheme`/`bundle-id`/`configuration`/`product-name`; app-
 
 Internal callees (`workflow_call` only; shells call the orchestrators, never these):
 
-- **`_build-ios.yml`** — iPhone/iPad, both channels (`profile-type` + `export-method` inputs). Apple Distribution cert only; `.ipa` artifact.
+- **`_build-ios.yml`** — iPhone/iPad (both channels) and Apple TV (App Store): the same archive → `.ipa` path, told apart only by the `destination` + `profile-type` + `export-method` inputs. Apple Distribution cert only; `.ipa` artifact. An Apple TV leg needs the tvOS platform in the runner's Xcode (`xcodebuild -downloadPlatform tvOS`). No Ad Hoc on Apple TV: it can't open an `itms-services` link.
 - **`_build-mac-store.yml`** — Mac App Store. Apple Distribution + Mac Installer Distribution certs; `.pkg` artifact (installer cert `3rd Party Mac Developer Installer`).
 - **`_build-mac-direct.yml`** — Developer ID. The logic lives in **`.github/scripts/build-direct.sh`** (single source of truth, also run locally by `scripts/build-local.sh`); the workflow runs ONE phase per named step: `profiles → setup → [pre-build hooks] → signing → archive → post-build → export → notarize → staple → verify → package → verify-packages → cleanup`. One phase ↔ one step; `tests/run.sh` checks the lockstep. `profiles` is the first phase and wipes `WORK_DIR` (cold DerivedData every run), also with `profile: false`, where it downloads nothing.
 
@@ -106,7 +107,7 @@ Bugs someone already paid for. Don't "clean them up".
 
 ## Scripts in `.github/scripts/`
 
-- **`products.py`** — `discover` / `plan` / `plan-release` / `plan-alpha`; pure stdlib; offline-testable via injected `GIT_TAGS` / `ASSUME_CHANGED` / `BUILD_NUMBER` / `SINCE` / `PRODUCTS_DIR`. Test defaults (`test-scheme` + `test-destination`) come from ONE leg — the first product's Mac leg if it has one, else its first leg. Emits `products`, `legs`, `<callee>-legs` + `has-<callee>`, `has-appcast`, `has-any`, `build-number`, test defaults.
+- **`products.py`** — `discover` / `plan` / `plan-release` / `plan-alpha`; pure stdlib; offline-testable via injected `GIT_TAGS` / `ASSUME_CHANGED` / `BUILD_NUMBER` / `SINCE` / `PRODUCTS_DIR`. Test defaults (`test-scheme` + `test-destination`) come from ONE leg — the first product's Mac leg if it has one, else its first leg. Emits `products`, `legs`, `<callee>-legs` + `has-<callee>`, `has-appcast`, `has-any`, `build-number`, test defaults. Each leg carries `build` (its callee), which the publish jobs also read as the leg's artifact folder, so a new platform is a `LEG_KINDS`/`CHANNELS` row plus its `altool --type` in the two upload loops.
 - **`profiles.py`** — `fetch [--install]` / `cleanup` / `archive-args` / `export-options` / `selftest`. JWT ES256 via `openssl` (stdlib can't sign ECDSA; DER → raw r‖s). Key from `ASC_KEY_BASE64` (CI, on disk only for the one openssl call) or `ASC_KEY_PATH`. Prints names, bundle IDs and dates only — never a token or profile content (Ad Hoc profiles list device IDs).
 - **`build-direct.sh`** — the Direct core (see above); env-driven, no cross-phase in-memory state.
 - **`classify-upload.sh`**, **`manifest.sh`** (Ad Hoc `itms-services` manifest; the S3 upload must be `text/xml` or iOS refuses it), **`changelog-from-json.sh`** (feat/fix/core/lang/release; `chore` dropped silently, anything else loudly, never on stdout), **`update-appcast.sh`**, **`run-tests.sh`**, **`memory_watch.py`**, **`jira_client.py`**, **`create_jira_ticket.py`**, **`create_test_ticket.py`**.
@@ -131,4 +132,4 @@ Vars: `S3_DISTRIBUTION_PATH`, `S3_DOWNLOAD_URL`, the `RUNS_ON_*` overrides (`RUN
 1. **Prove v0.6 on four apps** (CircleOfTrials incl. one alpha, FlowMoose incl. one release, MacPacker on hosted runners, VokabelLatein Ad Hoc), then move the other six; delete each app's `PROV_PROF_*` secrets after its first green run.
 2. **Archive workflows-ios and workflows-macos** once no app points at them; v1.0.0 when every app is on this repo.
 3. **Hardening not in v0.6.0:** pin `actions/*` to commit SHAs; a ruleset blocking moves/deletes of `v*` tags; a separate signing job (true isolation of certificates from app code).
-4. **Open decisions:** whether public MacPacker may hold an Admin key; tvOS/visionOS when the first app ships there; macpacker localization + App Store (not started).
+4. **Open decisions:** whether public MacPacker may hold an Admin key; visionOS when the first app ships there (tvOS is in since v0.6.6, unproven until the first Apple TV app uploads); macpacker localization + App Store (not started).

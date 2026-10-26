@@ -30,7 +30,7 @@
 #         - '!*-alpha.*'
 #   jobs:
 #     release:
-#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.5
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.6
 #       secrets:
 #         DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
 #         # …
@@ -181,7 +181,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-direct-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.5
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.6
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}

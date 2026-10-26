@@ -25,7 +25,7 @@ appended to `$GITHUB_OUTPUT`.
       "changelog": { "versions": [ { "version": "2.14.0", "items": [] } ] }
     }
 
-Channels per platform: ios takes app-store and ad-hoc; macos takes app-store
+Channels per platform: ios: app-store, ad-hoc; tvos: app-store; macos: app-store
 and direct. A leg's object holds only what differs from the product (scheme,
 bundle-id, configuration, product-name), plus `distribute` on an app-store or
 ad-hoc leg and the S3/Sparkle settings on a direct leg. An empty object means
@@ -82,20 +82,24 @@ import subprocess
 import sys
 
 # How each platform/channel pair is built, signed and shipped. `build` picks the
-# callee: _build-ios.yml, _build-mac-store.yml or _build-mac-direct.yml.
+# callee: _build-ios.yml (iPhone, iPad and Apple TV: the same archive to .ipa),
+# _build-mac-store.yml or _build-mac-direct.yml.
 LEG_KINDS = {
     ("ios", "app-store"): {"build": "ios", "destination": "generic/platform=iOS",
                            "profile-type": "IOS_APP_STORE", "export-method": "app-store-connect"},
     ("ios", "ad-hoc"): {"build": "ios", "destination": "generic/platform=iOS",
                         "profile-type": "IOS_APP_ADHOC", "export-method": "release-testing"},
+    ("tvos", "app-store"): {"build": "ios", "destination": "generic/platform=tvOS",
+                            "profile-type": "TVOS_APP_STORE", "export-method": "app-store-connect"},
     ("macos", "app-store"): {"build": "mac-store", "destination": "generic/platform=macOS",
                              "profile-type": "MAC_APP_STORE", "export-method": "app-store-connect"},
     ("macos", "direct"): {"build": "mac-direct", "destination": "generic/platform=macOS",
                           "profile-type": "MAC_APP_DIRECT", "export-method": "developer-id"},
 }
-CHANNELS = {"ios": ("app-store", "ad-hoc"), "macos": ("app-store", "direct")}
+# No Ad Hoc on tvOS: an Apple TV has no browser to open an itms-services link.
+CHANNELS = {"ios": ("app-store", "ad-hoc"), "tvos": ("app-store",), "macos": ("app-store", "direct")}
 # Designed in, switched on when the first app ships there.
-NOT_YET = ("tvos", "visionos")
+NOT_YET = ("visionos",)
 
 LEG_KEYS = {"scheme", "bundle-id", "configuration", "product-name", "cert-secret", "cert-password-secret",
             "asc-key", "team"}
@@ -134,7 +138,9 @@ RETIRED = {
     "changelog-filename": 'move it onto the direct leg',
 }
 
-IOS_SIMULATOR = "platform=iOS Simulator,name=iPhone 17"
+# The test gate's default -destination: the Mac itself, or a Simulator Xcode creates by default.
+TEST_DESTINATION = {"macos": "platform=macOS", "ios": "platform=iOS Simulator,name=iPhone 17",
+                    "tvos": "platform=tvOS Simulator,name=Apple TV 4K (3rd generation)"}
 
 
 def die(msg):
@@ -303,7 +309,7 @@ def resolve_legs(pid, p, errors):
                 "appcast-filename": str(leg.get("appcast-filename") or "appcast.xml"),
                 "appcast-seed-path": str(leg.get("appcast-seed-path") or "Config/appcast.xml"),
                 "changelog-filename": str(leg.get("changelog-filename") or "Changelog.json"),
-                "_build": kind["build"],
+                "build": kind["build"],  # the callee, and the artifact folder publish reads
             })
     return legs
 
@@ -393,7 +399,7 @@ def emit_legs(legs):
     comes with the presence boolean its build job gates on."""
     emit("legs", compact([strip_internal(l) for l in legs]))
     for build in ("ios", "mac-store", "mac-direct"):
-        sub = [strip_internal(l) for l in legs if l["_build"] == build]
+        sub = [strip_internal(l) for l in legs if l["build"] == build]
         emit(f"{build}-legs", compact(sub))
         emit(f"has-{build}", "true" if sub else "false")
     emit("has-appcast", "true" if any(l["channel"] == "direct" and l["appcast"] for l in legs) else "false")
@@ -404,13 +410,14 @@ def emit_test_defaults(records):
     # The FIRST discovered product (always present, even when nothing builds)
     # gives the opt-in test gate a scheme regardless of what changed. Scheme and
     # destination come from ONE leg: its Mac leg if it has one (no Simulator
-    # needed), else its first — an iPhone scheme tested on the Mac just fails.
+    # needed), else its first, on that platform's Simulator — an iPhone or Apple
+    # TV scheme tested on the Mac just fails.
     first = records[0]
     legs = first["_legs"]
     leg = next((l for l in legs if l["platform"] == "macos"), legs[0] if legs else None)
     emit("test-scheme", leg["scheme"] if leg else "")
     emit("test-app-name", first["product-name"])
-    emit("test-destination", "platform=macOS" if leg and leg["platform"] == "macos" else IOS_SIMULATOR)
+    emit("test-destination", TEST_DESTINATION[leg["platform"] if leg else "ios"])
 
 
 def cut(rec, legs, version, label, marketing_direct, release_tag):

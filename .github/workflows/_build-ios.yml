@@ -1,11 +1,13 @@
-# ── Internal Build Callee — iPhone and iPad (App Store, Ad Hoc) ─────────────
+# ── Internal Build Callee — iPhone, iPad and Apple TV ────────────────────────
 # Produces a signed .ipa, published as a GitHub Actions workflow artifact
 # (named by the artifact-name input; default "ios-build"). An orchestrator
-# downloads the artifact and uploads it with `xcrun altool --type ios` — or, for
-# an Ad Hoc leg, puts it on S3 with a manifest for itms-services installs.
+# downloads the artifact and uploads it with `xcrun altool --type ios`
+# (`appletvos` for Apple TV) — or, for an iPhone/iPad Ad Hoc leg, puts it on S3
+# with a manifest for itms-services installs.
 #
-# Both channels archive and sign identically; only the profile type and the
-# export method differ. No notarization, no DMG, no Sparkle.
+# Every leg archives and signs identically; only the destination, the profile
+# type and the export method differ. No notarization, no DMG, no Sparkle. An
+# Apple TV leg needs the tvOS platform installed in the runner's Xcode.
 #
 # Provisioning profiles come from App Store Connect: the first step downloads
 # every profile of the leg's type, and the app and each of its extensions
@@ -26,7 +28,7 @@
 #                             (downloads the profiles)
 #
 # Required caller inputs (identity comes from the caller's product list):
-#   scheme, profile-type, export-method
+#   scheme, destination, profile-type, export-method
 # ─────────────────────────────────────────────────────────────────────────────
 name: _build-ios
 
@@ -48,8 +50,12 @@ on:
         description: "Xcode scheme to archive."
         required: true
         type: string
+      destination:
+        description: "xcodebuild -destination for the archive: generic/platform=iOS, or generic/platform=tvOS for Apple TV (the leg's destination)."
+        required: true
+        type: string
       profile-type:
-        description: "App Store Connect profile type: IOS_APP_STORE (TestFlight, App Store) or IOS_APP_ADHOC (registered devices)."
+        description: "App Store Connect profile type: IOS_APP_STORE (TestFlight, App Store), IOS_APP_ADHOC (registered devices) or TVOS_APP_STORE (Apple TV)."
         required: true
         type: string
       export-method:
@@ -349,6 +355,7 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           TEAM: ${{ inputs.team }}
           PROFILE_TYPE: ${{ inputs.profile-type }}
+          DESTINATION: ${{ inputs.destination }}
         run: |
           set -euo pipefail
 
@@ -379,7 +386,7 @@ jobs:
             -scheme "${{ inputs.scheme }}" \
             -configuration "${{ inputs.configuration }}" \
             -archivePath /tmp/build/app.xcarchive \
-            -destination "generic/platform=iOS" \
+            -destination "$DESTINATION" \
             "${SIGN[@]}" \
             MARKETING_VERSION="${MARKETING_VERSION}" \
             CURRENT_PROJECT_VERSION=${{ inputs.build-number }} \

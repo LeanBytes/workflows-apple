@@ -211,8 +211,9 @@ chk_invalid() { # 1=name 2=platforms 3=expected message [4=extra top-level keys]
   err "$1" "$3"
   rm -rf "$d"
 }
-chk_invalid "tvOS is designed in, not yet supported" '{"tvos": {"app-store": {}}}' "platform 'tvos' is not supported yet"
+chk_invalid "visionOS is designed in, not yet supported" '{"visionos": {"app-store": {}}}' "platform 'visionos' is not supported yet"
 chk_invalid "unknown platform"                       '{"watch": {"app-store": {}}}' "unknown platform 'watch'"
+chk_invalid "Apple TV has no Ad Hoc channel"         '{"tvos": {"ad-hoc": {}}}' "tvos ships through app-store, not 'ad-hoc'"
 chk_invalid "Ad Hoc is not a Mac channel"            '{"macos": {"ad-hoc": {}}}' "macos ships through app-store or direct, not 'ad-hoc'"
 chk_invalid "Direct is not an iPhone channel"        '{"ios": {"direct": {}}}' "ios ships through app-store or ad-hoc, not 'direct'"
 chk_invalid "a platform without a channel"           '{"ios": {}}' "platforms.ios names no channel"
@@ -244,6 +245,20 @@ jok "the direct leg carries profile false and its team; every other leg keeps a 
 rm -rf "$d"
 CAP PRODUCTS_DIR="$MULTI" python3 "$PY" discover
 jok "a leg without the key signs with a profile, as before" 'assert all(x["profile"] is True for x in L().values()), L()'
+
+echo "== Apple TV: an iPhone app that also ships on Apple TV =="
+d=$(mkprod '{"ios": {"app-store": {}}, "tvos": {"app-store": {"scheme": "XTV"}}}' '')
+CAP PRODUCTS_DIR="$d" ASSUME_CHANGED="*" BUILD_NUMBER="7" python3 "$PY" plan
+jok "the Apple TV leg archives for tvOS with a tvOS profile, through the iPhone callee" \
+  't = L()["x-tvos-app-store"]; assert (t["destination"], t["profile-type"], t["export-method"], t["build"], t["scheme"]) == ("generic/platform=tvOS", "TVOS_APP_STORE", "app-store-connect", "ios", "XTV"), t'
+jok "both legs build in the iPhone subset, with one bare version" \
+  'assert sorted(L("ios-legs")) == ["x-ios-app-store", "x-tvos-app-store"], L("ios-legs"); assert {x["marketing"] for x in L().values()} == {"1.0.0"}; assert o["has-ios"] == "true"'
+rm -rf "$d"
+d=$(mkprod '{"tvos": {"app-store": {}}}' '')
+CAP PRODUCTS_DIR="$d" python3 "$PY" discover
+jok "an Apple TV-only product tests on the Apple TV Simulator" \
+  'assert o["test-destination"] == "platform=tvOS Simulator,name=Apple TV 4K (3rd generation)", o'
+rm -rf "$d"
 
 echo "== source-paths and real git: what counts as a change =="
 # Real git repos, real `git diff` — ASSUME_CHANGED is deliberately NOT set, so

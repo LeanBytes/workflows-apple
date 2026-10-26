@@ -36,7 +36,7 @@
 #         force: { description: "Build even if nothing changed", type: boolean, default: false }
 #   jobs:
 #     distribute:
-#       uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.5
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.6
 #       with:
 #         force: ${{ inputs.force || false }}
 #       secrets:
@@ -136,7 +136,7 @@ on:
         type: string
         default: ""
       test-destination:
-        description: "xcodebuild -destination for the test run. Defaults to the Mac when the first product has a Mac leg, else an iOS Simulator."
+        description: "xcodebuild -destination for the test run. Defaults to the Mac when the first product has a Mac leg, else the Simulator of its first leg's platform (iPhone or Apple TV)."
         type: string
         default: ""
       xcodebuild-test-args:
@@ -275,7 +275,7 @@ jobs:
   test:
     if: inputs.run-tests
     needs: prepare
-    uses: LeanBytes/workflows-apple/.github/workflows/_test.yml@v0.6.5
+    uses: LeanBytes/workflows-apple/.github/workflows/_test.yml@v0.6.6
     with:
       test-runner: ${{ inputs.test-runner }}
       runs-on: ${{ inputs.runs-on-test }}
@@ -308,7 +308,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.ios-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.5
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.6
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -318,6 +318,7 @@ jobs:
       artifact-name: ios-build-${{ matrix.leg.leg }}
       scheme: ${{ matrix.leg.scheme }}
       configuration: ${{ matrix.leg.configuration }}
+      destination: ${{ matrix.leg.destination }}            # iPhone/iPad or Apple TV
       team: ${{ matrix.leg.team }}
       profile-type: ${{ matrix.leg.profile-type }}
       export-method: ${{ matrix.leg.export-method }}
@@ -345,7 +346,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-store-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.5
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.6
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -382,7 +383,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-direct-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.5
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.6
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -486,14 +487,13 @@ jobs:
           set -euo pipefail
           python3 - "$LEGS_JSON" "$PRODUCTS_JSON" <<'PY'
           import json, sys
-          KIND = {("ios", "app-store"): "ios", ("ios", "ad-hoc"): "ios",
-                  ("macos", "app-store"): "mac-store", ("macos", "direct"): "mac-direct"}
+          # kind = the leg's build callee, which names its artifact folder.
           fields = ["leg", "id", "product-name", "platform", "channel", "distribute", "bundle-id",
                     "s3-subpath", "appcast-filename", "appcast-seed-path", "appcast",
-                    "artifact-label", "marketing"]
+                    "artifact-label", "marketing", "build"]
           with open("/tmp/legs.tsv", "w") as f:
               for l in json.loads(sys.argv[1]):
-                  row = [str(l.get(k, "")) for k in fields] + [KIND[(l["platform"], l["channel"])]]
+                  row = [str(l.get(k, "")) for k in fields]
                   f.write("\x1f".join(row) + "\n")
           with open("/tmp/products.tsv", "w") as f:
               for p in json.loads(sys.argv[2]):
@@ -557,7 +557,7 @@ jobs:
             if [ -z "$KEY" ]; then
               echo "::error::No App Store Connect key for leg $leg"; echo "::endgroup::"; exit 1
             fi
-            if [ "$plat" = "ios" ]; then ext=ipa; type=ios; else ext=pkg; type=macos; fi
+            case "$plat" in ios) ext=ipa; type=ios ;; tvos) ext=ipa; type=appletvos ;; *) ext=pkg; type=macos ;; esac
             FILE=$(ls ./artifacts/$kind/$kind-build-$leg/*.$ext 2>/dev/null | head -1 || true)
             if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
               echo "::error::No .$ext for leg $leg"; echo "::endgroup::"; exit 1

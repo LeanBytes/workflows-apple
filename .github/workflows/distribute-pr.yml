@@ -16,7 +16,7 @@
 #       types: [opened, synchronize]
 #   jobs:
 #     pr:
-#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-pr.yml@v0.6.5
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-pr.yml@v0.6.6
 # ─────────────────────────────────────────────────────────────────────────────
 name: distribute-pr
 
@@ -95,7 +95,7 @@ on:
         type: string
         default: ""
       test-destination:
-        description: "xcodebuild -destination for the test run. Defaults to the Mac when the first product has a Mac leg, else an iOS Simulator."
+        description: "xcodebuild -destination for the test run. Defaults to the Mac when the first product has a Mac leg, else the Simulator of its first leg's platform (iPhone or Apple TV)."
         type: string
         default: ""
       xcodebuild-test-args:
@@ -329,7 +329,7 @@ jobs:
   test:
     if: inputs.run-tests
     needs: discover
-    uses: LeanBytes/workflows-apple/.github/workflows/_test.yml@v0.6.5
+    uses: LeanBytes/workflows-apple/.github/workflows/_test.yml@v0.6.6
     with:
       test-runner: ${{ inputs.test-runner }}
       runs-on: ${{ inputs.runs-on-test }}

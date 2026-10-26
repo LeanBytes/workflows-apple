@@ -1,12 +1,12 @@
 # workflows-apple
 
-Reusable GitHub Actions workflows for Apple app distribution: **iPhone and iPad** (App Store via TestFlight, and Ad Hoc for registered devices) and **Mac** (Developer ID Direct with Sparkle, and the Mac App Store via TestFlight). Drop them into any app repo that ships one or more of those channels.
+Reusable GitHub Actions workflows for Apple app distribution: **iPhone and iPad** (App Store via TestFlight, and Ad Hoc for registered devices), **Apple TV** (App Store via TestFlight) and **Mac** (Developer ID Direct with Sparkle, and the Mac App Store via TestFlight). Drop them into any app repo that ships one or more of those channels.
 
 > **Heads up — strongly opinionated.** These workflows are tailored to how Stephan Arenswald (personal) and **LeanBytes** ship apps. They power **MacPacker**, **FlowMoose**, **FileFillet** and the LeanBytes iPhone apps in production. The choices baked in — Developer ID + App Store driven from a single repo, Sparkle 2 with stable + beta channels, AWS S3 for direct-download hosting in `eu-central-1`, timestamp-based build numbers, provisioning profiles fetched from App Store Connect at build time, one self-contained `Config/products/<id>.json` per product (build identity + inline changelog) as the source of truth — reflect that specific use case. If your distribution model is different, expect to patch rather than just configure.
 
 Adding a new app means: dropping one `Config/products/<id>.json` per product in your repo, setting the team's secrets once (certificates + one App Store Connect key) plus two S3 vars, creating one provisioning profile per bundle ID in the developer portal, and copying four **trigger-only** shell workflows into `.github/workflows/` (they *discover* your products — no `products` input). No build/sign/notarize/upload code lives in the consumer repo, and no provisioning profile is ever stored in GitHub.
 
-> **Moved in v0.6.5:** this repo used to be `LeanBytes/workflows-macos`. GitHub doesn't forward `uses:` lines to a renamed repo, so this is a new repo, not a rename. In your shells, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.5`; nothing else changes. Tags up to v0.6.4 and the v0.5.x fixes stay in workflows-macos and keep working.
+> **Moved in v0.6.5:** this repo used to be `LeanBytes/workflows-macos`. GitHub doesn't forward `uses:` lines to a renamed repo, so this is a new repo, not a rename. In your shells, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.6`; nothing else changes. Tags up to v0.6.4 and the v0.5.x fixes stay in workflows-macos and keep working.
 
 > **v0.6.0 (breaking):** iOS joined (it used to live in `LeanBytes/workflows-ios`), the product file names its platforms, profiles come from App Store Connect, `distribute-beta.yml` became `distribute.yml`, and App Store builds no longer get tags. See [MIGRATING.md](MIGRATING.md) for every path from v0.3, v0.4, v0.5 and workflows-ios. Pin v0.6.5, never v0.6.0: until v0.6.1 (and v0.5.10), every tag checked out main's shared scripts instead of its own (#34), and until v0.6.2 (and v0.5.11) no Tuist install honored the app's pin (#39).
 
@@ -36,10 +36,11 @@ A product names its **platforms** and the **channels** each ships through; `prod
 |---|---|---|---|
 | `ios` (iPhone, iPad) | `app-store` | `_build-ios.yml` | TestFlight → you submit it in App Store Connect |
 | `ios` | `ad-hoc` | `_build-ios.yml` | IPA + manifest on S3, installed via `itms-services://` on registered devices |
+| `tvos` (Apple TV) | `app-store` | `_build-ios.yml` | TestFlight → you submit it in App Store Connect |
 | `macos` | `app-store` | `_build-mac-store.yml` | TestFlight → you submit it in App Store Connect |
 | `macos` | `direct` | `_build-mac-direct.yml` | Notarized DMG/ZIP on S3, the Sparkle feed, a GitHub (pre-)release |
 
-`tvos` and `visionos` are designed in (App Store only) and get switched on when the first app ships there; a product file naming them fails with "not supported yet".
+An Apple TV leg builds like an iPhone leg (archive to `.ipa`, a `TVOS_APP_STORE` profile, upload as `appletvos`) and runs on the same runner, which needs the tvOS platform in Xcode: on a self-hosted Mac, run `xcodebuild -downloadPlatform tvOS` once. Apple TV has no Ad Hoc channel, since it has no browser to open an install link. `visionos` is designed in (App Store only) and gets switched on when the first app ships there; a product file naming it fails with "not supported yet".
 
 ## How versioning works (per-product, self-contained)
 
@@ -147,7 +148,7 @@ For a two-product repo, copy the templates in [`examples/per-app/two-product/`](
 
 ### 1. Provisioning profiles — create them once, in the developer portal
 
-CI never stores a profile. Every build job first downloads the team's **active** profiles of the type it needs (`IOS_APP_STORE`, `IOS_APP_ADHOC`, `MAC_APP_STORE` or `MAC_APP_DIRECT`) from the App Store Connect API, with the key the app already passes for uploads. At archive time each target — the app and each extension, widget or Watch app — looks up the profile for **its own bundle ID**; at export, every bundle in the archive is matched to its profile by bundle ID again. So:
+CI never stores a profile. Every build job first downloads the team's **active** profiles of the type it needs (`IOS_APP_STORE`, `IOS_APP_ADHOC`, `TVOS_APP_STORE`, `MAC_APP_STORE` or `MAC_APP_DIRECT`) from the App Store Connect API, with the key the app already passes for uploads. At archive time each target — the app and each extension, widget or Watch app — looks up the profile for **its own bundle ID**; at export, every bundle in the archive is matched to its profile by bundle ID again. So:
 
 - **Create one profile per bundle ID and channel** in the developer portal (any name). That's the whole setup; a new extension only needs its profile there.
 - **Renewal:** regenerate the profile in the portal; the next build uses it.
@@ -183,7 +184,7 @@ Only repo-level **infrastructure** lives in Variables.
 |---|---|
 | `S3_DISTRIBUTION_PATH` | Full S3 URI for downloads, e.g. `s3://my-bucket/my-app` (Direct and Ad Hoc) |
 | `S3_DOWNLOAD_URL` | Public HTTPS base URL for the same path (download links; the Ad Hoc manifest needs it) |
-| `RUNS_ON_BUILD_IOS` | *(optional, temporary)* Override the runner for the iPhone/iPad archive — see below |
+| `RUNS_ON_BUILD_IOS` | *(optional, temporary)* Override the runner for the iPhone/iPad and Apple TV archive — see below |
 | `RUNS_ON_BUILD_MAC_STORE` | *(optional, temporary)* Override the runner for the Mac App Store archive |
 | `RUNS_ON_BUILD_MAC_DIRECT` | *(optional, temporary)* Override the runner for the Developer ID archive |
 | `RUNS_ON_TEST` | *(optional, temporary)* Override the runner for the test job |
@@ -238,7 +239,7 @@ Copy from [`examples/per-app/`](examples/per-app/) — the same files serve ever
 - `distribute-release.yml` — your version tag.
 - `distribute-alpha.yml` — by hand, from any branch.
 
-Pin the `uses:` line to a tag (`@v0.6.5`), not `@main`. Uncomment per-app inputs as needed.
+Pin the `uses:` line to a tag (`@v0.6.6`), not `@main`. Uncomment per-app inputs as needed.
 
 **On secret passing.** GitHub Actions' `secrets: inherit` only crosses repository boundaries *within the same org/enterprise*, and it hands the shared workflow every secret the repo can see. The example shells list each secret explicitly, which works in every configuration and passes only what is used. Keep that block as-is.
 
@@ -304,7 +305,7 @@ The cache step runs first (restores the file if previously cached under that key
 
 ## Migrating
 
-[MIGRATING.md](MIGRATING.md) takes an app to v0.6.5 from `LeanBytes/workflows-macos` v0.6.x (a new address only), v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
+[MIGRATING.md](MIGRATING.md) takes an app to v0.6.6 from `LeanBytes/workflows-macos` v0.6.x (a new address only), v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
 
 - every retired product-file key and shell input, with its replacement
 - before and after files for a Direct + App Store app with extensions
@@ -355,7 +356,7 @@ codesign --verify --deep --strict --verbose=4 /tmp/verify/<PRODUCT_NAME>.app
 
 ```
 1. Render release notes from each product's inline .changelog
-2. (gate) altool → App Store Connect    every app-store leg with distribute (iPhone and Mac)
+2. (gate) altool → App Store Connect    every app-store leg with distribute (iPhone, Apple TV and Mac)
 3. aws s3 cp IPA + manifest.plist       every ad-hoc leg — live at once
 4. aws s3 cp DMG/ZIP                    every direct leg (silent — no Sparkle client polls these yet)
 5. (gate) beta appcast update           every direct leg with "appcast": true
@@ -385,7 +386,7 @@ Run an app's Swift tests at three points — all **opt-in** per app via `run-tes
 
 **Two runners**, via `test-runner: xcodebuild | swift | both`:
 - `swift` — the **core internal Swift package** (`swift-package-path`): `swift test --enable-code-coverage`, with an optional `coverage-min` gate. This is where coverage is reported.
-- `xcodebuild` — the **app/UI scheme** (`test-scheme`): unsigned `xcodebuild test` (XCTest + Swift Testing, app-hosted / UI) on `test-destination` — by default the Mac when the first product has a Mac leg, else an iOS Simulator (`platform=iOS Simulator,name=iPhone 17`).
+- `xcodebuild` — the **app/UI scheme** (`test-scheme`): unsigned `xcodebuild test` (XCTest + Swift Testing, app-hosted / UI) on `test-destination` — by default the Mac when the first product has a Mac leg, else the Simulator of its first leg's platform (`platform=iOS Simulator,name=iPhone 17` or `platform=tvOS Simulator,name=Apple TV 4K (3rd generation)`).
 - `both` runs both; a failure in **either** fails the run.
 
 Results render on the **run page** via `$GITHUB_STEP_SUMMARY` (per-runner pass/fail + coverage %, no download); the `.xcresult` / coverage / `test-report.json` are uploaded as an artifact for deep dives. Failure tickets are filed into the board's **current active sprint** — needs `JIRA_*` vars + the `JIRA_API_TOKEN` secret (optional `JIRA_BOARD_ID`).
@@ -395,7 +396,7 @@ Results render on the **run page** via `$GITHUB_STEP_SUMMARY` (per-runner pass/f
 Pin caller `uses:` to a tag, not `@main`:
 
 ```yaml
-uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.5
+uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.6
 ```
 
 Patch versions are the usual working unit — every workflow change ships under a new tag, and cross-callouts inside this repo plus `examples/per-app/` are bumped to that tag as part of the same commit. **`v0.6.0` is a breaking change** (see [Migrating](MIGRATING.md)); so was `v0.4.0`, which moved product identity + changelog into `Config/products/<id>.json`. Tags up to v0.6.4 live in `LeanBytes/workflows-macos`, the repo's old address, and fixes for v0.5.x callers still land there, on its `maint-v0.5` branch.
@@ -409,7 +410,7 @@ Patch versions are the usual working unit — every workflow change ships under 
     distribute.yml             ← orchestrator: push to main
     distribute-release.yml     ← orchestrator: version tag (Direct release)
     distribute-alpha.yml       ← orchestrator: manual private alpha
-    _build-ios.yml             ← callee: iPhone/iPad .ipa (App Store, Ad Hoc)
+    _build-ios.yml             ← callee: iPhone/iPad .ipa (App Store, Ad Hoc), Apple TV .ipa (App Store)
     _build-mac-store.yml       ← callee: Mac App Store .pkg
     _build-mac-direct.yml      ← callee: notarized Mac DMG + ZIP
     _test.yml                  ← reusable test runner (workflow_call)
