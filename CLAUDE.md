@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository purpose
 
-The **canonical shared CI/CD workflows for every LeanBytes and sarensw Apple app** — iPhone/iPad (App Store via TestFlight, Ad Hoc) and Mac (Developer ID Direct with Sparkle, Mac App Store via TestFlight). Each app repo carries four tiny trigger-only shells that call the orchestrators here via `uses: LeanBytes/workflows-macos/.github/workflows/<orchestrator>.yml@<tag>`.
+The **canonical shared CI/CD workflows for every LeanBytes and sarensw Apple app** — iPhone/iPad (App Store via TestFlight, Ad Hoc) and Mac (Developer ID Direct with Sparkle, Mac App Store via TestFlight). Each app repo carries four tiny trigger-only shells that call the orchestrators here via `uses: LeanBytes/workflows-apple/.github/workflows/<orchestrator>.yml@<tag>`.
 
-**v0.6.0 folded `LeanBytes/workflows-ios` back in** (issue #32). workflows-ios was a fork cut down to iOS; it gets only blocking fixes until its last app has moved, then it is archived. The last step of that plan renames this repo to **`workflows-apple`** (v1.0.0). New work lands here, never in workflows-ios.
+**v0.6.0 folded `LeanBytes/workflows-ios` back in** (issue #32). workflows-ios was a fork cut down to iOS; it gets only blocking fixes until its last app has moved, then it is archived.
+
+**v0.6.5 moved this repo from `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple`** — a new repo with the full history, not a GitHub rename: GitHub doesn't forward `uses:` to a renamed repo, so a rename would have broken every caller at once. workflows-macos keeps every tag up to v0.6.4 for old pins and the `maint-v0.5` branch for v0.5 fixes; it is archived once no app points at it. New work lands here, never in workflows-macos or workflows-ios. Issue numbers in commits before v0.6.5 (`(#43)`) refer to workflows-macos issues.
 
 Layout: `.github/workflows/_build-{ios,mac-store,mac-direct}.yml` are the internal callees (named by platform); `distribute-pr.yml`, `distribute.yml`, `distribute-release.yml`, `distribute-alpha.yml` are the orchestrators; `_test.yml` and `memory-watch.yml` are standalone reusables; `.github/scripts/` holds `products.py` (the planning brain), `profiles.py` (profiles from App Store Connect) and helpers; each app repo carries one `Config/products/<id>.json` per product; `examples/per-app/` has the shell templates; `MIGRATING.md` takes an app from any earlier line to the current one; `tests/` holds the offline suite.
 
@@ -121,12 +123,12 @@ Vars: `S3_DISTRIBUTION_PATH`, `S3_DOWNLOAD_URL`, the `RUNS_ON_*` overrides (`RUN
 - **All workflow logic lives here; per-app shells only declare triggers, inputs and the explicit secrets block.** Never `secrets: inherit` in the examples (same-org only, and it passes every secret).
 - **`tests/run.sh` must stay green** (`bash tests/run.sh`, ~10 s, needs python3, git, openssl, yq). Add a case for every behaviour change in `products.py` or `profiles.py`. It also checks the wiring of every `uses:` call against the callee's declared inputs and secrets (actionlint can't see across `uses:`), so a renamed input fails here instead of in an app repo. Lint with `actionlint -ignore 'property "workflow_sha" is not defined in object type \{check_run_id' -ignore 'shellcheck reported issue' .github/workflows/*.yml`.
 - **When bumping the tag, bump every `@vX.Y.Z` inside the shared workflows AND in `examples/per-app/`** in the same commit.
-- **When fixing a bug in a copied script, check workflows-ios** until it is archived.
+- **When fixing a bug in a copied script, check workflows-ios** until it is archived. A bug v0.5 callers hit also gets fixed in `LeanBytes/workflows-macos` on `maint-v0.5`.
 - **Prove changes end to end on one app first.** TestFlight is a free smoke test (an upload triggers no review; internal testers are unlimited); `"distribute": false` on a leg builds and signs without contacting App Store Connect for uploads (profiles are still fetched).
 
 ## Roadmap (remaining work)
 
 1. **Prove v0.6 on four apps** (CircleOfTrials incl. one alpha, FlowMoose incl. one release, MacPacker on hosted runners, VokabelLatein Ad Hoc), then move the other six; delete each app's `PROV_PROF_*` secrets after its first green run.
-2. **Rename to `workflows-apple` v1.0.0** and archive workflows-ios.
+2. **Archive workflows-ios and workflows-macos** once no app points at them; v1.0.0 when every app is on this repo.
 3. **Hardening not in v0.6.0:** pin `actions/*` to commit SHAs; a ruleset blocking moves/deletes of `v*` tags; a separate signing job (true isolation of certificates from app code).
 4. **Open decisions:** whether public MacPacker may hold an Admin key; tvOS/visionOS when the first app ships there; macpacker localization + App Store (not started).

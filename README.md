@@ -1,4 +1,4 @@
-# workflows-macos
+# workflows-apple
 
 Reusable GitHub Actions workflows for Apple app distribution: **iPhone and iPad** (App Store via TestFlight, and Ad Hoc for registered devices) and **Mac** (Developer ID Direct with Sparkle, and the Mac App Store via TestFlight). Drop them into any app repo that ships one or more of those channels.
 
@@ -6,7 +6,9 @@ Reusable GitHub Actions workflows for Apple app distribution: **iPhone and iPad*
 
 Adding a new app means: dropping one `Config/products/<id>.json` per product in your repo, setting the team's secrets once (certificates + one App Store Connect key) plus two S3 vars, creating one provisioning profile per bundle ID in the developer portal, and copying four **trigger-only** shell workflows into `.github/workflows/` (they *discover* your products — no `products` input). No build/sign/notarize/upload code lives in the consumer repo, and no provisioning profile is ever stored in GitHub.
 
-> **v0.6.0 (breaking):** iOS joined (it used to live in `LeanBytes/workflows-ios`), the product file names its platforms, profiles come from App Store Connect, `distribute-beta.yml` became `distribute.yml`, and App Store builds no longer get tags. See [MIGRATING.md](MIGRATING.md) for every path from v0.3, v0.4, v0.5 and workflows-ios. Pin v0.6.4, never v0.6.0: until v0.6.1 (and v0.5.10), every tag checked out main's shared scripts instead of its own (#34), and until v0.6.2 (and v0.5.11) no Tuist install honored the app's pin (#39).
+> **Moved in v0.6.5:** this repo used to be `LeanBytes/workflows-macos`. GitHub doesn't forward `uses:` lines to a renamed repo, so this is a new repo, not a rename. In your shells, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.5`; nothing else changes. Tags up to v0.6.4 and the v0.5.x fixes stay in workflows-macos and keep working.
+
+> **v0.6.0 (breaking):** iOS joined (it used to live in `LeanBytes/workflows-ios`), the product file names its platforms, profiles come from App Store Connect, `distribute-beta.yml` became `distribute.yml`, and App Store builds no longer get tags. See [MIGRATING.md](MIGRATING.md) for every path from v0.3, v0.4, v0.5 and workflows-ios. Pin v0.6.5, never v0.6.0: until v0.6.1 (and v0.5.10), every tag checked out main's shared scripts instead of its own (#34), and until v0.6.2 (and v0.5.11) no Tuist install honored the app's pin (#39).
 
 ## Architecture
 
@@ -236,7 +238,7 @@ Copy from [`examples/per-app/`](examples/per-app/) — the same files serve ever
 - `distribute-release.yml` — your version tag.
 - `distribute-alpha.yml` — by hand, from any branch.
 
-Pin the `uses:` line to a tag (`@v0.6.4`), not `@main`. Uncomment per-app inputs as needed.
+Pin the `uses:` line to a tag (`@v0.6.5`), not `@main`. Uncomment per-app inputs as needed.
 
 **On secret passing.** GitHub Actions' `secrets: inherit` only crosses repository boundaries *within the same org/enterprise*, and it hands the shared workflow every secret the repo can see. The example shells list each secret explicitly, which works in every configuration and passes only what is used. Keep that block as-is.
 
@@ -302,7 +304,7 @@ The cache step runs first (restores the file if previously cached under that key
 
 ## Migrating
 
-[MIGRATING.md](MIGRATING.md) takes an app to v0.6.4 from v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
+[MIGRATING.md](MIGRATING.md) takes an app to v0.6.5 from `LeanBytes/workflows-macos` v0.6.x (a new address only), v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
 
 - every retired product-file key and shell input, with its replacement
 - before and after files for a Direct + App Store app with extensions
@@ -321,17 +323,17 @@ Need a signed + notarized DMG/ZIP to test a fix — without burning a commit and
 
 **One-time setup:**
 
-1. `cp examples/local-build.env.example ~/.config/workflows-macos/<app>.env` and fill it from your app repo's GitHub Actions secrets + vars (the same base64 cert, ASC key, and scheme/bundle/product values CI uses). It holds a signing cert — keep it **outside any git repo** and `chmod 600` it.
+1. `cp examples/local-build.env.example ~/.config/workflows-apple/<app>.env` and fill it from your app repo's GitHub Actions secrets + vars (the same base64 cert, ASC key, and scheme/bundle/product values CI uses). It holds a signing cert — keep it **outside any git repo** and `chmod 600` it.
 2. Make sure any pre-build asset is present locally (e.g. FlowMoose's Whisper model), or set `PRE_BUILD_SCRIPT` in the env file.
 
 **Run** (from your app repo, or pass `--project-dir`):
 
 ```bash
-# from a workflows-macos checkout on disk:
-~/path/to/workflows-macos/scripts/build-local.sh --env-file ~/.config/workflows-macos/flowmoose.env
+# from a workflows-apple checkout on disk:
+~/path/to/workflows-apple/scripts/build-local.sh --env-file ~/.config/workflows-apple/flowmoose.env
 
 # fast signing-only loop (skip notarization, ZIP only):
-~/path/to/workflows-macos/scripts/build-local.sh --env-file … --skip-notarize --no-dmg
+~/path/to/workflows-apple/scripts/build-local.sh --env-file … --skip-notarize --no-dmg
 ```
 
 Artifacts land in `<app-repo>/dist/<PRODUCT_NAME>_<version>.{zip,dmg}`, where the version defaults to `<Changelog versions[0]>-local.<build-number>` — the `-local.` marker keeps a stray local build from being mistaken for a shipped `-beta.N`/release. **Add `dist/` (and your env file, if you keep it in-repo) to your app repo's `.gitignore`.**
@@ -393,10 +395,10 @@ Results render on the **run page** via `$GITHUB_STEP_SUMMARY` (per-runner pass/f
 Pin caller `uses:` to a tag, not `@main`:
 
 ```yaml
-uses: LeanBytes/workflows-macos/.github/workflows/distribute.yml@v0.6.4
+uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.5
 ```
 
-Patch versions are the usual working unit — every workflow change ships under a new tag, and cross-callouts inside this repo plus `examples/per-app/` are bumped to that tag as part of the same commit. **`v0.6.0` is a breaking change** (see [Migrating](MIGRATING.md)); so was `v0.4.0`, which moved product identity + changelog into `Config/products/<id>.json`.
+Patch versions are the usual working unit — every workflow change ships under a new tag, and cross-callouts inside this repo plus `examples/per-app/` are bumped to that tag as part of the same commit. **`v0.6.0` is a breaking change** (see [Migrating](MIGRATING.md)); so was `v0.4.0`, which moved product identity + changelog into `Config/products/<id>.json`. Tags up to v0.6.4 live in `LeanBytes/workflows-macos`, the repo's old address, and fixes for v0.5.x callers still land there, on its `maint-v0.5` branch.
 
 ## Repo layout
 
@@ -445,7 +447,7 @@ tests/
 
 ## If you fork this repo private
 
-The canonical repo at `LeanBytes/workflows-macos` is public; consumers don't need any extra access plumbing. If you fork it to a private repo for your own use, two extra permissions matter:
+The canonical repo at `LeanBytes/workflows-apple` is public; consumers don't need any extra access plumbing. If you fork it to a private repo for your own use, two extra permissions matter:
 
 1. **Permission to *call* the workflows.** Set under your private fork's `Settings → Actions → General → Access`. Allow the consuming repos (or the whole org).
 2. **Permission to *clone* the fork's scripts from inside the workflow.** The default `GITHUB_TOKEN` of a calling workflow is scoped to the calling repo only. Provide a token via a `SHARED_WORKFLOWS_TOKEN` secret on each consumer. Every `.shared-ci` checkout references it as `${{ secrets.SHARED_WORKFLOWS_TOKEN || github.token }}` — the orchestrators forward it to the build callees, and everything falls back to `github.token` when the repo is public.

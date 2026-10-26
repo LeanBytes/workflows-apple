@@ -1,6 +1,6 @@
 name: selftest
 
-# CI for workflows-macos itself (the repo has no other self-CI): lint every
+# CI for workflows-apple itself (the repo has no other self-CI): lint every
 # workflow and run the offline suite (products.py, profiles.py, the wiring of
 # every workflow call, examples included) whenever .github/**, examples/** or
 # tests/** change. `job.workflow_sha` and shellcheck style findings are ignored:
@@ -28,7 +28,7 @@ permissions:
 jobs:
   lint-and-test:
     # ubuntu-latest, and NOT self-hosted like the rest of this repo. No
-    # self-hosted runner is attached to workflows-macos — the org's macOS runner
+    # self-hosted runner is attached to workflows-apple — the org's macOS runner
     # serves the app repos — so `[self-hosted, macOS]` here queued forever and
     # this workflow silently did not run for 27 days (a queued job reports
     # nothing, so it never went red). Nothing here needs a Mac anyway: actionlint

@@ -36,7 +36,7 @@
 #         force: { description: "Build even if nothing changed", type: boolean, default: false }
 #   jobs:
 #     distribute:
-#       uses: LeanBytes/workflows-macos/.github/workflows/distribute.yml@v0.6.4
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.5
 #       with:
 #         force: ${{ inputs.force || false }}
 #       secrets:
@@ -226,7 +226,7 @@ jobs:
       - name: Checkout shared scripts
         uses: actions/checkout@v6
         with:
-          repository: LeanBytes/workflows-macos
+          repository: LeanBytes/workflows-apple
           ref: ${{ job.workflow_sha || 'job.workflow_sha-is-empty' }}
           path: .shared-ci
           token: ${{ secrets.SHARED_WORKFLOWS_TOKEN || github.token }}
@@ -275,7 +275,7 @@ jobs:
   test:
     if: inputs.run-tests
     needs: prepare
-    uses: LeanBytes/workflows-macos/.github/workflows/_test.yml@v0.6.4
+    uses: LeanBytes/workflows-apple/.github/workflows/_test.yml@v0.6.5
     with:
       test-runner: ${{ inputs.test-runner }}
       runs-on: ${{ inputs.runs-on-test }}
@@ -308,7 +308,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.ios-legs) }}
-    uses: LeanBytes/workflows-macos/.github/workflows/_build-ios.yml@v0.6.4
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.5
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -345,7 +345,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-store-legs) }}
-    uses: LeanBytes/workflows-macos/.github/workflows/_build-mac-store.yml@v0.6.4
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.5
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -382,7 +382,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-direct-legs) }}
-    uses: LeanBytes/workflows-macos/.github/workflows/_build-mac-direct.yml@v0.6.4
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.5
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -449,7 +449,7 @@ jobs:
       - name: Checkout shared scripts
         uses: actions/checkout@v6
         with:
-          repository: LeanBytes/workflows-macos
+          repository: LeanBytes/workflows-apple
           ref: ${{ job.workflow_sha || 'job.workflow_sha-is-empty' }}
           path: .shared-ci
           token: ${{ secrets.SHARED_WORKFLOWS_TOKEN || github.token }}

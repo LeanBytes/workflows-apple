@@ -363,7 +363,7 @@ callers = list(wf.items()) + [(f"examples/{os.path.basename(p)}", load(p))
 bad, calls = [], 0
 for cname, doc in callers:
     for jname, job in (doc.get("jobs") or {}).items():
-        m = re.match(r"LeanBytes/workflows-macos/\.github/workflows/([\w.-]+\.yml)@", job.get("uses", ""))
+        m = re.match(r"LeanBytes/workflows-apple/\.github/workflows/([\w.-]+\.yml)@", job.get("uses", ""))
         if not m:
             continue
         calls += 1
@@ -783,7 +783,7 @@ WANT = "${{ job.workflow_sha || 'job.workflow_sha-is-empty' }}"
 bad, n = [], 0
 for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.yml"))):
     for step in re.split(r"\n(?=\s*- )", open(f).read()):
-        if "repository: LeanBytes/workflows-macos" not in step:
+        if "repository: LeanBytes/workflows-apple" not in step:
             continue
         n += 1
         m = re.search(r"^\s*ref:\s*(.+?)\s*$", step, re.M)
@@ -798,6 +798,19 @@ if not bad:
     print(f"  ok  : all {n} shared-script checkouts use the called workflow's own commit and fail when it is empty")
 sys.exit(1 if bad else 0)
 PYREF
+
+echo
+echo "== every call names this repo, at one tag =="
+# v0.6.5 moved the repo from workflows-macos; a call left on the old name still runs, from the old repo.
+OLD=$(grep -rnE '(uses|repository):[[:space:]]*LeanBytes/workflows-macos' "$ROOT/.github/workflows" "$ROOT/examples")
+TAGS=$(grep -rhoE 'LeanBytes/workflows-apple/\.github/workflows/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+' "$ROOT/.github/workflows" "$ROOT/examples" | sed 's/.*@//' | sort -u)
+if [ -n "$OLD" ]; then
+  echo "  FAIL: still calls the old repo:"; echo "$OLD" | sed 's/^/    /'; FAIL=1
+elif [ "$(printf '%s\n' "$TAGS" | grep -c .)" -ne 1 ]; then
+  echo "  FAIL: calls into this repo pin '$(echo $TAGS)', not one tag"; FAIL=1
+else
+  pass "every call and shared-script checkout names LeanBytes/workflows-apple, all at $TAGS"
+fi
 
 echo
 echo "== MIGRATING.md: every retired product-file key names its replacement =="

@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   pr:
-    uses: LeanBytes/workflows-macos/.github/workflows/distribute-pr.yml@v0.6.4
+    uses: LeanBytes/workflows-apple/.github/workflows/distribute-pr.yml@v0.6.5
     # ── Optional inputs (uncomment what applies) ────────────────────────────
     # with:
     #   use-tuist: true                                 # FlowMoose
@@ -26,5 +26,5 @@ jobs:
     #   test-destination: "platform=iOS Simulator,name=iPhone 17"   # default: the Mac if the product has a Mac leg
     #   swift-package-path: Core
     #   coverage-min: "70"
-    # secrets:                                          # only for a PRIVATE fork of workflows-macos
+    # secrets:                                          # only for a PRIVATE fork of workflows-apple
     #   SHARED_WORKFLOWS_TOKEN: ${{ secrets.SHARED_WORKFLOWS_TOKEN }}

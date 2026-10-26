@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared Jira helpers for the workflows-macos CI ticket scripts.
+"""Shared Jira helpers for the workflows-apple CI ticket scripts.
 
 REST API v2 issue create (HTTP Basic auth) + **active-sprint placement** via the Jira Software
 (agile/1.0) API. Imported by `create_jira_ticket.py` (memory-leak) and `create_test_ticket.py`

@@ -8,12 +8,12 @@
 #
 # One-time setup:
 #   1. Copy examples/local-build.env.example to a file OUTSIDE any git repo
-#      (it holds a base64 signing cert), e.g. ~/.config/workflows-macos/<app>.env.
+#      (it holds a base64 signing cert), e.g. ~/.config/workflows-apple/<app>.env.
 #      Fill it from your app repo's GitHub secrets + vars, then `chmod 600` it.
 #   2. Ensure any pre-build asset is present (or set PRE_BUILD_SCRIPT in the env).
 #
 # Run from your app repo (or pass --project-dir):
-#   build-local.sh --env-file ~/.config/workflows-macos/flowmoose.env
+#   build-local.sh --env-file ~/.config/workflows-apple/flowmoose.env
 #   build-local.sh --env-file … --skip-notarize --no-dmg   # fast signing-only loop
 #
 # Output: <project>/dist/<PRODUCT_NAME>_<version>.{zip,dmg}

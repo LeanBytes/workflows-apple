@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Watch a running process's memory and decide whether it is leaking.
 
-Used by the shared memory-watch workflow (LeanBytes/workflows-macos / memory-watch.yml) to run a
+Used by the shared memory-watch workflow (LeanBytes/workflows-apple / memory-watch.yml) to run a
 macOS app for an extended period and detect the kind of unbounded growth that pins a machine. Pure
 stdlib so it runs on the system python3 of a self-hosted macOS runner (3.8+).
 

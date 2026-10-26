@@ -2,7 +2,7 @@
 # Runs an app's Swift tests UNSIGNED and reports pass/fail + coverage. Called by
 # distribute-pr.yml (red check on PRs), distribute.yml (a gate before anything
 # is built or published), and a per-app nightly shell. The test logic lives in the
-# shared `.github/scripts/run-tests.sh`; this workflow checks workflows-macos out
+# shared `.github/scripts/run-tests.sh`; this workflow checks workflows-apple out
 # into `.shared-ci/` (same commit, via job.workflow_sha) and runs it.
 #
 # Two runners via `test-runner` (xcodebuild | swift | both): `swift` covers the
@@ -18,7 +18,7 @@
 # Optional vars (only when file-jira-on-failure): JIRA_BASE_URL, JIRA_PROJECT_KEY,
 #   JIRA_USER_EMAIL, JIRA_ISSUE_TYPE, JIRA_BOARD_ID.
 # Optional secrets: JIRA_API_TOKEN (when file-jira-on-failure), SHARED_WORKFLOWS_TOKEN
-#   (when consuming a PRIVATE fork of workflows-macos).
+#   (when consuming a PRIVATE fork of workflows-apple).
 # ─────────────────────────────────────────────────────────────────────────────
 name: _test
 
@@ -194,7 +194,7 @@ jobs:
       - name: Checkout shared scripts
         uses: actions/checkout@v6
         with:
-          repository: LeanBytes/workflows-macos
+          repository: LeanBytes/workflows-apple
           ref: ${{ job.workflow_sha || 'job.workflow_sha-is-empty' }}
           path: .shared-ci
           token: ${{ secrets.SHARED_WORKFLOWS_TOKEN || github.token }}
