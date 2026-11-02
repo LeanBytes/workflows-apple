@@ -6,7 +6,7 @@ Reusable GitHub Actions workflows for Apple app distribution: **iPhone and iPad*
 
 Adding a new app means: dropping one `Config/products/<id>.json` per product in your repo, setting the team's secrets once (certificates + one App Store Connect key) plus two S3 vars, creating one provisioning profile per bundle ID in the developer portal, and copying four **trigger-only** shell workflows into `.github/workflows/` (they *discover* your products — no `products` input). No build/sign/notarize/upload code lives in the consumer repo, and no provisioning profile is ever stored in GitHub.
 
-> **Moved in v0.6.5:** this repo used to be `LeanBytes/workflows-macos`. GitHub doesn't forward `uses:` lines to a renamed repo, so this is a new repo, not a rename. In your shells, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.6`; nothing else changes. Tags up to v0.6.4 and the v0.5.x fixes stay in workflows-macos and keep working.
+> **Moved in v0.6.5:** this repo used to be `LeanBytes/workflows-macos`. GitHub doesn't forward `uses:` lines to a renamed repo, so this is a new repo, not a rename. In your shells, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.7`; nothing else changes. Tags up to v0.6.4 and the v0.5.x fixes stay in workflows-macos and keep working.
 
 > **v0.6.0 (breaking):** iOS joined (it used to live in `LeanBytes/workflows-ios`), the product file names its platforms, profiles come from App Store Connect, `distribute-beta.yml` became `distribute.yml`, and App Store builds no longer get tags. See [MIGRATING.md](MIGRATING.md) for every path from v0.3, v0.4, v0.5 and workflows-ios. Pin v0.6.5, never v0.6.0: until v0.6.1 (and v0.5.10), every tag checked out main's shared scripts instead of its own (#34), and until v0.6.2 (and v0.5.11) no Tuist install honored the app's pin (#39).
 
@@ -239,7 +239,7 @@ Copy from [`examples/per-app/`](examples/per-app/) — the same files serve ever
 - `distribute-release.yml` — your version tag.
 - `distribute-alpha.yml` — by hand, from any branch.
 
-Pin the `uses:` line to a tag (`@v0.6.6`), not `@main`. Uncomment per-app inputs as needed.
+Pin the `uses:` line to a tag (`@v0.6.7`), not `@main`. Uncomment per-app inputs as needed.
 
 **On secret passing.** GitHub Actions' `secrets: inherit` only crosses repository boundaries *within the same org/enterprise*, and it hands the shared workflow every secret the repo can see. The example shells list each secret explicitly, which works in every configuration and passes only what is used. Keep that block as-is.
 
@@ -260,6 +260,11 @@ on:
 For a product without a Direct leg, the release run only checks the tag and builds nothing — submit the build you tested in App Store Connect.
 
 **GH (pre-)release titles + assets.** The title matches the tag. By default a Direct build's DMG + ZIP are attached to its release; set **`attach-release-assets: false`** to skip that and **save GitHub storage/bandwidth** — the DMG/ZIP still go to S3 (where the appcast points).
+
+**Sparkle downloads from GitHub (off by default).** S3 charges for data out, and the same ZIP is already on the GitHub Release. Set **`appcast-downloads-from-github: true`** in the `distribute.yml` and `distribute-release.yml` shells, and new Sparkle items download from `https://github.com/<repo>/releases/download/<tag>/`. The appcast stays on S3, because `SUFeedURL` is built into installed apps. The DMG, ZIP and `Changelog.json` still upload there, and older items keep their S3 URLs.
+- The GitHub (pre-)release comes before the appcast (see [Publish ordering](#publish-ordering)), always with its assets: `attach-release-assets: false` is ignored.
+- Before the appcast moves, the run checks that the URL answers 200 with the local ZIP's size. A private repo stops there, because its assets need authentication, and so does a `product-name` with a space, because GitHub renames the asset.
+- **If the run fails after the (pre-)release exists, re-run the failed job.** It keeps the tag and the release, uploads the assets again and carries on to the appcast. Nothing else finishes that beta: `plan` compares against its `-beta.N` tag, so a new push builds only if it changes the product, and then as the next beta. A re-run needs the build artifacts, and a public repo keeps those for one day. After that, re-running all jobs of a release run rebuilds it; for a beta, a `force` run builds the next one.
 
 **GitHub Discussions (off by default, releases only).** Set `create-discussion: true` in `distribute-release.yml`'s shell to auto-open a discussion alongside each stable release; the category defaults to `Announcements` (`discussion-category: <name>` overrides it). The orchestrator passes `--discussion-category` to `gh release create` as one atomic call, so if the discussion API errors, **no release is created**. Before turning it on, check that Discussions are enabled, a category with the **exact** name exists, and the shell grants `discussions: write` — a misleading `HTTP 404: Discussion could not be created` covers all three.
 
@@ -305,7 +310,7 @@ The cache step runs first (restores the file if previously cached under that key
 
 ## Migrating
 
-[MIGRATING.md](MIGRATING.md) takes an app to v0.6.6 from `LeanBytes/workflows-macos` v0.6.x (a new address only), v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
+[MIGRATING.md](MIGRATING.md) takes an app to v0.6.7 from `LeanBytes/workflows-macos` v0.6.x (a new address only), v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
 
 - every retired product-file key and shell input, with its replacement
 - before and after files for a Direct + App Store app with extensions
@@ -315,6 +320,7 @@ The cache step runs first (restores the file if previously cached under that key
 - a one-line fix for apps still pinned to v0.5.9 or older
 - the `mise.toml` pin a Tuist app needs
 - a Direct app that keeps an old team's certificate after its App ID moved to another team
+- Sparkle updates served from GitHub Releases instead of S3
 
 ## Local builds (no CI)
 
@@ -365,6 +371,18 @@ codesign --verify --deep --strict --verbose=4 /tmp/verify/<PRODUCT_NAME>.app
 
 `distribute-release.yml` does steps 1, 4, the product's `Changelog.json` to S3, the stable appcast, and the GitHub Release last. The appcast update is the "go-live" moment for Sparkle clients; the GH (pre-)release is created last. A failure anywhere short-circuits the rest, so you never end up with a half-published version — and a build job that failed or was cancelled stops the publish job altogether.
 
+With **`appcast-downloads-from-github`** the new appcast item points at the GitHub (pre-)release, so that comes first, in both workflows:
+
+```
+1. aws s3 cp DMG/ZIP                    and, for a release, Changelog.json (silent)
+2. (pre-)release                        a beta's tag, gh release create, gh release upload DMG + ZIP
+3. (gate) curl the ZIP's GitHub URL     200 with the local ZIP's size, or the run stops here
+4. generate_appcast                     --download-url-prefix https://github.com/<repo>/releases/download/<tag>/
+5. aws s3 cp the appcast                the go-live moment
+```
+
+A failure after step 2 leaves the tag and the release in place and the appcast where it was. Re-running the failed job finishes the publish.
+
 ## Memory-leak watch
 
 A reusable workflow ([`memory-watch.yml`](.github/workflows/memory-watch.yml)) that builds a Mac app **unsigned**, runs it for hours on a runner, and samples its resident memory to catch leaks (unbounded growth). It reuses this repo's build knowledge — Tuist install/generate, runner selection, the `.shared-ci` script sharing — so a calling app sets only a few inputs; no signing, no release machinery.
@@ -396,7 +414,7 @@ Results render on the **run page** via `$GITHUB_STEP_SUMMARY` (per-runner pass/f
 Pin caller `uses:` to a tag, not `@main`:
 
 ```yaml
-uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.6
+uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.7
 ```
 
 Patch versions are the usual working unit — every workflow change ships under a new tag, and cross-callouts inside this repo plus `examples/per-app/` are bumped to that tag as part of the same commit. **`v0.6.0` is a breaking change** (see [Migrating](MIGRATING.md)); so was `v0.4.0`, which moved product identity + changelog into `Config/products/<id>.json`. Tags up to v0.6.4 live in `LeanBytes/workflows-macos`, the repo's old address, and fixes for v0.5.x callers still land there, on its `maint-v0.5` branch.
@@ -420,6 +438,7 @@ Patch versions are the usual working unit — every workflow change ships under 
     products.py                ← discover / plan / plan-release / plan-alpha brain
     profiles.py                ← provisioning profiles from App Store Connect: fetch, archive args, ExportOptions
     build-direct.sh            ← shared Direct build core (CI + local both run this)
+    github-release.sh          ← a Direct build's GitHub (pre-)release, and the check that GitHub serves its ZIP
     classify-upload.sh         ← one definition of "did the altool upload land?"
     manifest.sh                ← the Ad Hoc itms-services manifest
     changelog-from-json.sh     ← render Markdown notes from a product's inline .changelog

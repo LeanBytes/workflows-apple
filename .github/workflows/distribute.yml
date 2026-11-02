@@ -24,6 +24,11 @@
 #   4. Beta appcast update for every appcast leg            ← MAKES BETA VISIBLE
 #   5. Per Direct product: push its -beta.N tag + a pre-release (assets attached)
 #
+# With appcast-downloads-from-github the new appcast item points at the
+# pre-release's ZIP, so step 5 comes before step 4, re-runnable, and step 4
+# first checks GitHub serves the ZIP: a failure stops the run with the appcast
+# where it was.
+#
 # `[skip ci]` in a commit message skips the run entirely (GitHub-native).
 #
 # Per-app shell (trigger-only; the full one is examples/per-app/distribute.yml):
@@ -36,7 +41,7 @@
 #         force: { description: "Build even if nothing changed", type: boolean, default: false }
 #   jobs:
 #     distribute:
-#       uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.6
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.7
 #       with:
 #         force: ${{ inputs.force || false }}
 #       secrets:
@@ -115,9 +120,13 @@ on:
         type: number
         default: 7
       attach-release-assets:
-        description: "Attach a Direct build's DMG/ZIP to its GitHub pre-release. Default true. Set false to save GitHub storage/bandwidth — the DMG/ZIP still upload to S3 (the real distribution) and the appcast points there; only the redundant GitHub copy is skipped."
+        description: "Attach a Direct build's DMG/ZIP to its GitHub pre-release. Default true. Set false to save GitHub storage/bandwidth — the DMG/ZIP still upload to S3 (the real distribution) and the appcast points there; only the redundant GitHub copy is skipped. Ignored with appcast-downloads-from-github, which needs the assets."
         type: boolean
         default: true
+      appcast-downloads-from-github:
+        description: "Point new Sparkle items at the GitHub pre-release's ZIP instead of S3, which charges for data out. The appcast itself stays on S3, where installed apps read it; the DMG and ZIP still upload there, and older items keep their S3 URLs. The tag and pre-release then come before the appcast, with their assets whatever attach-release-assets says, and the run checks GitHub serves the ZIP before the appcast moves: a private repo or a product-name with a space stops there. If the run fails after the tag exists, re-run the failed job: `plan` compares against that tag, so a new push builds only if it changes the product, and then as the next beta."
+        type: boolean
+        default: false
 
       # ── Tests (opt-in) — gate the build on the app's Swift tests ───────────
       run-tests:
@@ -275,7 +284,7 @@ jobs:
   test:
     if: inputs.run-tests
     needs: prepare
-    uses: LeanBytes/workflows-apple/.github/workflows/_test.yml@v0.6.6
+    uses: LeanBytes/workflows-apple/.github/workflows/_test.yml@v0.6.7
     with:
       test-runner: ${{ inputs.test-runner }}
       runs-on: ${{ inputs.runs-on-test }}
@@ -308,7 +317,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.ios-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.6
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.7
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -346,7 +355,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-store-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.6
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.7
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -383,7 +392,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-direct-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.6
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.7
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -438,8 +447,10 @@ jobs:
       PRODUCTS_JSON: ${{ needs.prepare.outputs.products }}
       PRODUCTS_DIR: ${{ inputs.products-dir }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      REPO: ${{ github.repository }}
-      ATTACH_ASSETS: ${{ inputs.attach-release-assets }}
+      # An appcast pointing at the pre-release needs the assets there, so the
+      # second input overrides the first.
+      ATTACH_ASSETS: ${{ inputs.attach-release-assets || inputs.appcast-downloads-from-github }}
+      DOWNLOADS_FROM_GITHUB: ${{ inputs.appcast-downloads-from-github }}
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@v6
@@ -654,6 +665,13 @@ jobs:
             echo "::endgroup::"
           done < /tmp/legs.tsv
 
+      # ── appcast-downloads-from-github: tag + pre-release first, ZIP in place ─
+      # The same call as the step after the appcast: exactly one of the two runs.
+      - name: Push beta tag + create pre-release, before the appcast (per direct product)
+        if: inputs.appcast-downloads-from-github
+        shell: bash
+        run: .shared-ci/.github/scripts/github-release.sh beta
+
       # ── GATE 2: Beta appcast update (per direct leg) ───────────────────────
       - name: Download Sparkle
         if: needs.prepare.outputs.has-appcast == 'true'
@@ -692,7 +710,14 @@ jobs:
               echo "No ${afile} on S3, seeding from ${aseed}"
               cp "${aseed}" "${WORK}/${afile}"
             fi
-            echo "$SPARKLE_ED_PRIVATE_KEY" | /tmp/sparkle/bin/generate_appcast --ed-key-file - --channel beta "${WORK}/"
+            # A string, not an array: "${empty[@]}" is an unbound variable under
+            # `set -u` on macOS's bash 3.2.
+            PREFIX=""
+            if [ "$DOWNLOADS_FROM_GITHUB" = "true" ]; then
+              RTAG=$(.shared-ci/.github/scripts/github-release.sh beta-tag "$id")
+              PREFIX=$(.shared-ci/.github/scripts/github-release.sh download-prefix "$RTAG" "$WORK"/*.zip)
+            fi
+            echo "$SPARKLE_ED_PRIVATE_KEY" | /tmp/sparkle/bin/generate_appcast --ed-key-file - --channel beta ${PREFIX:+--download-url-prefix "$PREFIX"} "${WORK}/"
             # Match by build number — beta items repeat marketing version across merges.
             NOTES=""
             [ -f "/tmp/notes-$id.md" ] && NOTES=$(cat "/tmp/notes-$id.md")
@@ -707,33 +732,16 @@ jobs:
       # LAST, so a failed upload never leaves a tag claiming the build shipped.
       # App Store and Ad Hoc builds get no tag: a tag marks a build that reaches
       # customers on its own, and a TestFlight upload doesn't.
+      #
+      # With appcast-downloads-from-github the step before the appcast does this
+      # instead, because the new item points at the pre-release's ZIP. A failed
+      # appcast then does leave its -beta.N tag behind, and `plan` sees nothing
+      # changed since it: only a further change builds again, as the next beta.
+      # Re-running the failed job is what finishes this one.
       - name: Push beta tag + create pre-release (per direct product)
+        if: ${{ !inputs.appcast-downloads-from-github }}
         shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          while IFS=$'\x1f' read -r id pname ver rtag; do
-            [ -n "$rtag" ] || continue
-            echo "::group::publish $id → $rtag"
-            if git rev-parse "refs/tags/$rtag" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "$rtag" >/dev/null 2>&1; then
-              echo "tag $rtag already exists — skipping (idempotent re-run)"; echo "::endgroup::"; continue
-            fi
-            git tag -a "$rtag" -m "Beta $rtag"
-            git push origin "$rtag"
-            NOTES_ARG=(--notes "Beta $rtag ($pname)")
-            if [ -f "/tmp/notes-$id.md" ] && [ -s "/tmp/notes-$id.md" ]; then
-              NOTES_ARG=(--notes-file "/tmp/notes-$id.md")
-            fi
-            gh release create "$rtag" --repo "$REPO" --title "$rtag" --prerelease "${NOTES_ARG[@]}"
-            if [ "$ATTACH_ASSETS" = "true" ]; then
-              shopt -s nullglob
-              ASSETS=( ./artifacts/mac-direct/mac-direct-build-$id-macos-direct/*.dmg ./artifacts/mac-direct/mac-direct-build-$id-macos-direct/*.zip )
-              shopt -u nullglob
-              [ ${#ASSETS[@]} -gt 0 ] && gh release upload "$rtag" --repo "$REPO" --clobber "${ASSETS[@]}"
-            fi
-            echo "pushed $rtag + pre-release ✅"; echo "::endgroup::"
-          done < /tmp/products.tsv
+        run: .shared-ci/.github/scripts/github-release.sh beta
 
       # ── Run summary ────────────────────────────────────────────────────────
       - name: Write summary

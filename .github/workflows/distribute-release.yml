@@ -19,6 +19,12 @@
 #   5. gh release create             (for the tag)
 #   6. gh release upload (DMG + ZIP)
 #
+# With appcast-downloads-from-github the new appcast item points at the GH
+# Release's ZIP, so the release can't come last. After steps 1-3:
+#   4. gh release create + upload (DMG + ZIP), re-runnable
+#   5. Check GitHub serves the ZIP   (a failure stops the run; the appcast stays)
+#   6. Stable appcast update         (--download-url-prefix) ← visible
+#
 # Per-app shell (the full one is examples/per-app/distribute-release.yml):
 #
 #   on:
@@ -30,7 +36,7 @@
 #         - '!*-alpha.*'
 #   jobs:
 #     release:
-#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.6
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.7
 #       secrets:
 #         DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
 #         # …
@@ -91,9 +97,13 @@ on:
         type: number
         default: 7
       attach-release-assets:
-        description: "Attach the DMG/ZIP to the GitHub Release. Default true. Set false to save GitHub storage/bandwidth — the DMG/ZIP still upload to S3 (the real distribution) and the appcast points there; only the redundant GitHub copy is skipped. Notes + tag are still created."
+        description: "Attach the DMG/ZIP to the GitHub Release. Default true. Set false to save GitHub storage/bandwidth — the DMG/ZIP still upload to S3 (the real distribution) and the appcast points there; only the redundant GitHub copy is skipped. Notes + tag are still created. Ignored with appcast-downloads-from-github, which needs the assets."
         type: boolean
         default: true
+      appcast-downloads-from-github:
+        description: "Point new Sparkle items at the GitHub Release's ZIP instead of S3, which charges for data out. The appcast itself stays on S3, where installed apps read it; the DMG, ZIP and Changelog.json still upload there, and older items keep their S3 URLs. The release then comes before the appcast, with its assets whatever attach-release-assets says, and the run checks GitHub serves the ZIP before the appcast moves: a private repo or a product-name with a space stops there. If the run fails after the release exists, re-run the failed job."
+        type: boolean
+        default: false
       create-discussion:
         description: |
           Auto-create a GitHub Discussion alongside the release. OFF by default —
@@ -181,7 +191,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-direct-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.6
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.7
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -232,6 +242,7 @@ jobs:
       LEGS_JSON: ${{ needs.prepare.outputs.legs }}
       PRODUCTS_DIR: ${{ inputs.products-dir }}
       TARGET_ID: ${{ needs.prepare.outputs.target-id }}
+      DOWNLOADS_FROM_GITHUB: ${{ inputs.appcast-downloads-from-github }}
     steps:
       - name: Checkout caller repo
         uses: actions/checkout@v6
@@ -346,6 +357,21 @@ jobs:
             echo "Uploaded ${clfile} → ${DEST}/"
           done < /tmp/legs.tsv
 
+      # ── appcast-downloads-from-github: the release first, its ZIP in place ─
+      # The same calls as the two steps after the appcast, and only one side
+      # runs. The assets go up whatever attach-release-assets says: the appcast
+      # points at them.
+      - name: Create GitHub Release + attach DMG + ZIP, before the appcast
+        if: inputs.appcast-downloads-from-github
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CREATE_DISCUSSION: ${{ inputs.create-discussion }}
+          DISCUSSION_CATEGORY: ${{ inputs.discussion-category }}
+        run: |
+          .shared-ci/.github/scripts/github-release.sh stable "$GITHUB_REF_NAME"
+          .shared-ci/.github/scripts/github-release.sh attach "$GITHUB_REF_NAME" "$TARGET_ID"
+
       # ── GATE: Stable appcast update ────────────────────────────────────────
       - name: Download Sparkle
         if: needs.prepare.outputs.has-appcast == 'true'
@@ -386,7 +412,13 @@ jobs:
               echo "No ${afile} on S3, seeding from ${aseed}"
               cp "${aseed}" "${WORK}/${afile}"
             fi
-            echo "$SPARKLE_ED_PRIVATE_KEY" | /tmp/sparkle/bin/generate_appcast --ed-key-file - "${WORK}/"
+            # A string, not an array: "${empty[@]}" is an unbound variable under
+            # `set -u` on macOS's bash 3.2.
+            PREFIX=""
+            if [ "$DOWNLOADS_FROM_GITHUB" = "true" ]; then
+              PREFIX=$(.shared-ci/.github/scripts/github-release.sh download-prefix "$GITHUB_REF_NAME" "$WORK"/*.zip)
+            fi
+            echo "$SPARKLE_ED_PRIVATE_KEY" | /tmp/sparkle/bin/generate_appcast --ed-key-file - ${PREFIX:+--download-url-prefix "$PREFIX"} "${WORK}/"
             NOTES=""
             [ -s /tmp/notes.md ] && NOTES=$(cat /tmp/notes.md)
             VERSION="$VERSION" NOTES="$NOTES" APPCAST_PATH="${WORK}/${afile}" \
@@ -398,37 +430,20 @@ jobs:
 
       # ── FINAL: GitHub Release for the tag ──────────────────────────────────
       - name: Create GitHub Release
+        if: ${{ !inputs.appcast-downloads-from-github }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CREATE_DISCUSSION: ${{ inputs.create-discussion }}
           DISCUSSION_CATEGORY: ${{ inputs.discussion-category }}
-        run: |
-          set -euo pipefail
-          ARGS=(--repo "${{ github.repository }}" --title "${{ github.ref_name }}")
-          if [ -f /tmp/notes.md ] && [ -s /tmp/notes.md ]; then
-            ARGS+=(--notes-file /tmp/notes.md)
-          else
-            ARGS+=(--notes "Release ${{ github.ref_name }}")
-          fi
-          if [ "$CREATE_DISCUSSION" = "true" ] && [ -n "$DISCUSSION_CATEGORY" ]; then
-            ARGS+=(--discussion-category "$DISCUSSION_CATEGORY")
-          fi
-          gh release create "${{ github.ref_name }}" "${ARGS[@]}"
+        run: .shared-ci/.github/scripts/github-release.sh stable "$GITHUB_REF_NAME"
 
       - name: Attach DMG + ZIP to GH Release
-        if: inputs.attach-release-assets
+        if: ${{ inputs.attach-release-assets && !inputs.appcast-downloads-from-github }}
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          ASSETS=( ./artifacts/mac-direct/mac-direct-build-*/*.dmg ./artifacts/mac-direct/mac-direct-build-*/*.zip )
-          if [ ${#ASSETS[@]} -eq 0 ]; then
-            echo "No DMG/ZIP assets to attach"; exit 0
-          fi
-          gh release upload "${{ github.ref_name }}" --repo "${{ github.repository }}" --clobber "${ASSETS[@]}"
+        run: .shared-ci/.github/scripts/github-release.sh attach "$GITHUB_REF_NAME" "$TARGET_ID"
 
       - name: Write release summary
         shell: bash
