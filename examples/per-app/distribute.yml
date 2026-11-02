@@ -36,7 +36,7 @@ permissions:
 
 jobs:
   distribute:
-    uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.6
+    uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.7
     # `secrets: inherit` only works same-org; the explicit list works universally.
     # One list for every app: a secret a leg doesn't use is simply never read.
     # No provisioning profiles — the App Store Connect key downloads them.
@@ -77,4 +77,5 @@ jobs:
     #   runs-on-publish: '"macos-26"'
     #   run-tests: true                  # gate the build on tests (files a Jira ticket on failure)
     #   attach-release-assets: false     # skip GitHub pre-release asset upload (S3 keeps the DMG/ZIP) — saves budget
+    #   appcast-downloads-from-github: true  # new Sparkle items download from the GitHub pre-release, not S3; public repos (README). Set it in the release shell too
     #   artifact-retention-days: 30      # keep uploaded build/test artifacts longer than the 7-day default

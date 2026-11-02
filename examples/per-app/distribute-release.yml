@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   release:
-    uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.6
+    uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.7
     secrets:
       DEVELOPER_ID_P12_BASE64:        ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
       DEVELOPER_ID_PASSWORD:          ${{ secrets.DEVELOPER_ID_PASSWORD }}
@@ -48,4 +48,5 @@ jobs:
     #   runs-on-build-mac-direct: '"macos-26"'  # runners default to self-hosted macOS; override to hosted (or a specific runner) here
     #   create-discussion: true          # opt-in; needs Discussions + the exact category
     #   attach-release-assets: false     # skip GitHub-Release asset upload (S3 keeps the DMG/ZIP) — saves budget
+    #   appcast-downloads-from-github: true  # new Sparkle items download from the GitHub Release, not S3; public repos (README). Set it in the distribute shell too
     #   artifact-retention-days: 30      # keep uploaded build artifacts longer than the 7-day default

@@ -873,4 +873,161 @@ sys.exit(1 if bad else 0)
 PYTUIST
 
 echo
+echo "== appcast-downloads-from-github: off changes nothing, on puts the ZIP on GitHub first =="
+# Each list is the publish job from the S3 upload on. The publish job is the
+# last in both files. Off is v0.6.6's step list, so it is spelled out rather
+# than derived.
+python3 - "$W" <<'PYORDER' || FAIL=1
+import re, sys
+ON = "if: inputs.appcast-downloads-from-github\n"
+OFF = "!inputs.appcast-downloads-from-github }}\n"
+WANT = {
+    "distribute.yml": ("publish",
+        ["Upload DMG + ZIP to S3 (per direct leg)", "Download Sparkle", "Update Sparkle beta appcast (per direct leg)",
+         "Push beta tag + create pre-release (per direct product)", "Write summary", "Cleanup"],
+        ["Upload DMG + ZIP to S3 (per direct leg)", "Push beta tag + create pre-release, before the appcast (per direct product)",
+         "Download Sparkle", "Update Sparkle beta appcast (per direct leg)", "Write summary", "Cleanup"]),
+    "distribute-release.yml": ("publish-release",
+        ["Upload DMG + ZIP to S3", "Upload Changelog.json to S3", "Download Sparkle", "Update Sparkle stable appcast",
+         "Create GitHub Release", "Attach DMG + ZIP to GH Release", "Write release summary", "Cleanup"],
+        ["Upload DMG + ZIP to S3", "Upload Changelog.json to S3", "Create GitHub Release + attach DMG + ZIP, before the appcast",
+         "Download Sparkle", "Update Sparkle stable appcast", "Write release summary", "Cleanup"]),
+}
+bad = []
+for f, (job, off_order, on_order) in WANT.items():
+    text = open(f"{sys.argv[1]}/{f}").read()
+    if not re.search(r"^      appcast-downloads-from-github:\n(        .*\n)*?        type: boolean\n        default: false\n", text, re.M):
+        bad.append(f"{f}: the input is not a boolean defaulting to false")
+    steps = {}
+    order = []
+    for block in re.split(r"\n      - name: ", text[text.index(f"\n  {job}:\n"):])[1:]:
+        name = block.splitlines()[0]
+        order.append(name)
+        steps[name] = block
+    for label, skip, want in (("off", ON, off_order), ("on", OFF, on_order)):
+        got = [n for n in order if skip not in steps[n]]
+        got = got[got.index(want[0]):]
+        if got != want:
+            bad.append(f"{f}: order with the input {label}: {got}")
+    late = [n for n in order if OFF in steps[n]]
+    early = on_order[on_order.index("Download Sparkle") - 1]
+    if len(late) != len(off_order) - len(on_order) + 1 or ON not in steps[early]:
+        bad.append(f"{f}: {late} and '{early}' need opposite if:s")
+    for n in late:
+        cmd = re.search(r"^        run: (.+)$", steps[n], re.M).group(1)
+        if cmd not in steps[early]:
+            bad.append(f"{f}: '{early}' doesn't run what '{n}' runs: {cmd}")
+    # On, the assets go up whatever attach-release-assets says.
+    forced = ("inputs.attach-release-assets || inputs.appcast-downloads-from-github" in text if job == "publish"
+              else "attach-release-assets" not in steps[early]
+                   and "if: ${{ inputs.attach-release-assets && !inputs.appcast-downloads-from-github }}" in steps["Attach DMG + ZIP to GH Release"])
+    if not forced:
+        bad.append(f"{f}: the input must attach the assets whatever attach-release-assets says")
+    appcast = steps[[n for n in order if "appcast" in n and n.startswith("Update Sparkle")][0]]
+    gen = appcast.index("/tmp/sparkle/bin/generate_appcast")
+    if not -1 < appcast.find("github-release.sh download-prefix") < gen:
+        bad.append(f"{f}: nothing checks the ZIP before generate_appcast")
+    if '${PREFIX:+--download-url-prefix "$PREFIX"}' not in appcast[gen:]:
+        bad.append(f"{f}: generate_appcast doesn't take the checked prefix")
+    if '[ "$DOWNLOADS_FROM_GITHUB" = "true" ]; then' not in appcast:
+        bad.append(f"{f}: the prefix isn't conditional on the input")
+for b in bad:
+    print(f"  FAIL: {b}")
+if not bad:
+    print("  ok  : off keeps today's order, on publishes to GitHub and checks the ZIP before generate_appcast, in both orchestrators")
+sys.exit(1 if bad else 0)
+PYORDER
+
+GR="$ROOT/.github/scripts/github-release.sh"
+T=$(mktemp -d); mkdir -p "$T/bin" "$T/work"
+for d in app pro; do
+  a="$T/work/artifacts/mac-direct/mac-direct-build-$d-macos-direct"; mkdir -p "$a"
+  : > "$a/$d.dmg"; printf hello > "$a/$d.zip"
+done
+printf 'pro\037Pro\0372.0.0\037pro-v2.0.0-beta.1\nstore\037Store\0371.0.0\037\n' > "$T/products.tsv"
+cat > "$T/bin/gh" <<'SH'
+#!/bin/sh
+echo "gh $*" >> "$STUB_LOG"
+[ "$1 $2" != "release view" ] || [ -n "${RELEASE_EXISTS:-}" ]
+SH
+cat > "$T/bin/git" <<'SH'
+#!/bin/sh
+echo "git $*" >> "$STUB_LOG"
+case "$1" in rev-parse|ls-remote) [ -n "${TAG_EXISTS:-}" ] ;; esac
+SH
+cat > "$T/bin/curl" <<'SH'
+#!/bin/sh
+echo "curl $*" >> "$STUB_LOG"
+cat "$CURL_HEADERS"
+exit "${CURL_RC:-0}"
+SH
+chmod +x "$T/bin/"*
+# What GitHub really answers: a redirect that says content-length: 0, then the file.
+printf 'HTTP/2 302 \r\nlocation: https://assets\r\ncontent-length: 0\r\n\r\nHTTP/2 200 \r\nContent-Length: 5\r\n\r\n' > "$T/ok"
+printf 'HTTP/2 302 \r\ncontent-length: 0\r\n\r\nHTTP/2 200 \r\ncontent-length: 6\r\n\r\n' > "$T/size"
+printf 'HTTP/2 302 \r\ncontent-length: 5\r\n\r\nHTTP/2 200 \r\n\r\n' > "$T/nosize"
+printf 'HTTP/2 404 \r\ncontent-length: 5\r\n\r\n' > "$T/404"
+gr() { : > "$T/log"; CAP PATH="$T/bin:$PATH" STUB_LOG="$T/log" GITHUB_REPOSITORY=acme/app PRODUCTS_TSV="$T/products.tsv" CURL_HEADERS="$T/ok" "$@"; }
+ops() { grep -oE '^(git (tag|push)|gh release (view|create|upload))' "$T/log" | tr '\n' ';'; }
+is() { [ "$RC" -eq 0 ] && [ "$(ops)" = "$2" ] && pass "$1" || bad "$1 — ran '$(ops)', want '$2'"; }
+cd "$T/work" || exit 1
+
+gr "$GR" stable v1.0.0
+is "stable, off: creates" "gh release create;"
+gr RELEASE_EXISTS=1 "$GR" stable v1.0.0
+is "stable, off: an existing release isn't looked for, so create still fails as it did" "gh release create;"
+gr DOWNLOADS_FROM_GITHUB=true "$GR" stable v1.0.0
+is "stable, on, first run: creates" "gh release view;gh release create;"
+gr DOWNLOADS_FROM_GITHUB=true RELEASE_EXISTS=1 "$GR" stable v1.0.0
+is "stable, on, re-run: keeps the release" "gh release view;"
+gr "$GR" attach v1.0.0 nothing-built
+is "attach: no assets, nothing to upload" ""
+gr "$GR" attach v1.0.0 app
+is "attach: uploads, also on a re-run" "gh release upload;"
+grep -qF 'gh release upload v1.0.0 --repo acme/app --clobber ./artifacts/mac-direct/mac-direct-build-app-macos-direct/app.dmg ./artifacts/mac-direct/mac-direct-build-app-macos-direct/app.zip' "$T/log" \
+  && pass "the upload clobbers, and takes the DMG and the ZIP" || bad "stable upload arguments: $(cat "$T/log")"
+gr CREATE_DISCUSSION=true DISCUSSION_CATEGORY=News "$GR" stable v1.0.0
+grep -qF -- '--discussion-category News' "$T/log" && pass "stable: the opt-in discussion reaches gh" || bad "no --discussion-category: $(cat "$T/log")"
+
+gr ATTACH_ASSETS=true "$GR" beta
+is "beta, off: tag, push, create, upload; a product without a tag is skipped" "git tag;git push;gh release create;gh release upload;"
+grep -qF -- '--prerelease' "$T/log" && pass "beta: a pre-release" || bad "beta without --prerelease: $(cat "$T/log")"
+gr ATTACH_ASSETS=false "$GR" beta
+is "beta, off, attach-release-assets false: no upload" "git tag;git push;gh release create;"
+gr ATTACH_ASSETS=true TAG_EXISTS=1 "$GR" beta
+is "beta, off, re-run: the tag exists, so nothing else runs, as before" ""
+gr ATTACH_ASSETS=true DOWNLOADS_FROM_GITHUB=true "$GR" beta
+is "beta, on, first run: tag, push, create, upload" "git tag;git push;gh release view;gh release create;gh release upload;"
+gr ATTACH_ASSETS=true DOWNLOADS_FROM_GITHUB=true TAG_EXISTS=1 RELEASE_EXISTS=1 "$GR" beta
+is "beta, on, re-run: keeps tag and release, uploads again" "gh release view;gh release upload;"
+grep -qF -- 'gh release upload pro-v2.0.0-beta.1 --repo acme/app --clobber' "$T/log" && pass "beta re-run: the upload clobbers" || bad "beta upload: $(cat "$T/log")"
+gr ATTACH_ASSETS=true DOWNLOADS_FROM_GITHUB=true TAG_EXISTS=1 "$GR" beta
+is "beta, on, re-run after a failed create: the tag stays, the pre-release comes" "gh release view;gh release create;gh release upload;"
+
+gr "$GR" beta-tag pro
+[ "$OUT" = "pro-v2.0.0-beta.1" ] && pass "a prefixed product's tag comes from products.tsv" || bad "beta-tag pro"
+gr "$GR" beta-tag store
+err "a product without a tag fails instead of building a URL without one" "no beta tag for product 'store'"
+gr "$GR" beta-tag nope
+err "an unknown product fails" "no beta tag for product 'nope'"
+
+ZIP="$T/work/artifacts/mac-direct/mac-direct-build-pro-macos-direct/pro.zip"
+gr "$GR" download-prefix pro-v2.0.0-beta.1 "$ZIP"
+[ "$RC" -eq 0 ] && [ "$OUT" = "https://github.com/acme/app/releases/download/pro-v2.0.0-beta.1/" ] \
+  && pass "the prefix names the repo and the tag, alone on stdout" || bad "download-prefix"
+case "$OUT" in */) pass "the prefix ends in / (without it the URL silently loses the tag)" ;; *) bad "the prefix lost its trailing slash" ;; esac
+grep -qF -- '--retry 5 --retry-all-errors https://github.com/acme/app/releases/download/pro-v2.0.0-beta.1/pro.zip' "$T/log" \
+  && grep -qE '^curl -[a-zA-Z]*f[a-zA-Z]* ' "$T/log" \
+  && pass "curl asks for that ZIP, retrying a 404 too" || bad "curl arguments: $(cat "$T/log")"
+for c in size nosize 404; do
+  gr CURL_HEADERS="$T/$c" CURL_RC=$([ "$c" = 404 ] && echo 22 || echo 0) "$GR" download-prefix pro-v2.0.0-beta.1 "$ZIP"
+  { [ "$RC" -ne 0 ] && [ -z "$OUT" ] && grep -qF '::error::' /tmp/pd.err; } \
+    && pass "the last hop decides ($c): no prefix, no appcast" || bad "download-prefix accepted '$c'"
+done
+gr "$GR" download-prefix "" "$ZIP"
+err "an empty tag fails" "no tag for the download URL"
+cd "$ROOT" || exit 1
+rm -rf "$T"
+
+echo
 [ $FAIL -eq 0 ] && echo "ALL TESTS PASSED ✅" || { echo "SOME TESTS FAILED ❌"; exit 1; }
