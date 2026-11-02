@@ -125,13 +125,14 @@ CAP PRODUCTS_DIR="$MULTI" TAG="main-v2.14.0" BUILD_NUMBER="x" python3 "$PY" plan
 [ $RC -eq 0 ] && pass "main release exit 0" || bad "main release exit"
 line "target-id=main" "target-id=main"
 line "version=2.14.0" "version=2.14.0"
-jok "only the Direct leg rebuilds, with the bare version" \
-  'l = L(); assert list(l) == ["main-macos-direct"], l; assert l["main-macos-direct"]["marketing"] == "2.14.0"; assert o["has-mac-store"] == "false"'
+jok "the Direct and App Store legs build together, with the bare version and for the App Store" \
+  'l = L(); assert sorted(l) == ["main-macos-app-store", "main-macos-direct"], l; assert {x["marketing"] for x in l.values()} == {"2.14.0"}, l; assert not any(x.get("internal-only") for x in l.values()), l; assert o["has-mac-store"] == "true" and o["has-mac-direct"] == "true"'
+line "both share one build number" "build-number=x"
 
 CAP PRODUCTS_DIR="$MULTI" TAG="companion-v1.3.0" BUILD_NUMBER="x" python3 "$PY" plan-release
 [ $RC -eq 0 ] && pass "companion (store-only) release exit 0" || bad "companion release exit"
-line "store-only release builds nothing" "has-any=false"
-grep -q "nothing is built" /tmp/pd.err && pass "and says so" || bad "a store-only release must say nothing is built"
+jok "the tag is the release for a store-only product too: its App Store leg builds, with the bare version" \
+  'assert list(L()) == ["companion-ios-app-store"], L(); assert L()["companion-ios-app-store"]["marketing"] == "1.3.0"; assert o["has-mac-direct"] == "false" and o["has-ios"] == "true"'
 
 for T in "main-v9.9.9" "v2.14.0" "bogus-v1.0.0" "main-v2.14.0-beta.1" "main-v2.14.0-alpha.1"; do
   CAP PRODUCTS_DIR="$MULTI" TAG="$T" python3 "$PY" plan-release
@@ -245,6 +246,23 @@ jok "the direct leg carries profile false and its team; every other leg keeps a 
 rm -rf "$d"
 CAP PRODUCTS_DIR="$MULTI" python3 "$PY" discover
 jok "a leg without the key signs with a profile, as before" 'assert all(x["profile"] is True for x in L().values()), L()'
+
+echo "== plan-release: what a release tag builds =="
+d=$(mkprod '{"ios": {"app-store": {}, "ad-hoc": {}}, "tvos": {"app-store": {}}, "macos": {"direct": {}, "app-store": {"distribute": false}}}' '"product-name": "X",')
+CAP PRODUCTS_DIR="$d" TAG="x-v1.0.0" BUILD_NUMBER="7" python3 "$PY" plan-release
+jok "every App Store leg builds with the Direct leg, also one that doesn't upload; Ad Hoc doesn't" \
+  'assert sorted(L()) == ["x-ios-app-store", "x-macos-app-store", "x-macos-direct", "x-tvos-app-store"], L(); assert L()["x-macos-app-store"]["distribute"] is False; assert sorted(L("ios-legs")) == ["x-ios-app-store", "x-tvos-app-store"]'
+rm -rf "$d"
+d=$(mkprod '{"ios": {"app-store": {}}, "macos": {"app-store": {}}}' '')
+CAP PRODUCTS_DIR="$d" TAG="x-v1.0.0" BUILD_NUMBER="7" python3 "$PY" plan-release
+jok "without a Direct leg, every App Store leg still builds" \
+  'assert sorted(L()) == ["x-ios-app-store", "x-macos-app-store"], L()'
+rm -rf "$d"
+d=$(mkprod '{"ios": {"ad-hoc": {}}}' '')
+CAP PRODUCTS_DIR="$d" TAG="x-v1.0.0" BUILD_NUMBER="7" python3 "$PY" plan-release
+line "only Ad Hoc legs: nothing builds, they go live on every push" "has-any=false"
+grep -q "nothing is built" /tmp/pd.err && pass "and says so" || bad "an Ad Hoc release must say nothing is built"
+rm -rf "$d"
 
 echo "== Apple TV: an iPhone app that also ships on Apple TV =="
 d=$(mkprod '{"ios": {"app-store": {}}, "tvos": {"app-store": {"scheme": "XTV"}}}' '')
@@ -431,12 +449,17 @@ for f in ("distribute-alpha.yml", "distribute.yml", "distribute-release.yml"):
         if "/_build-mac-direct.yml@" in job["uses"] and job["with"].get("profile") != "${{ matrix.leg.profile }}":
             bad.append(f"{f}:{jname}: does not pass the leg's profile choice (#43)")
     text = open(p).read()
-    if "altool --upload-app" in text and '--apiKey "$KEY" --apiIssuer "$ISSUER"' not in text:
-        bad.append(f"{f}: the TestFlight upload does not use the leg's key")
+    if "altool --upload-app" in text:
+        bad.append(f"{f}: uploads must go through testflight-upload.sh, the one definition")
+    step = text[text.index("- name: Upload to TestFlight"):]
+    step = step[:step.index("testflight-upload.sh")]
+    bad += [f"{f}: the upload step gets no {k}" for pair in KEYS for k in pair if f"secrets.{k}" not in step]
+    if "rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8" not in text:
+        bad.append(f"{f}: Cleanup leaves the App Store Connect keys on the runner")
 for b in bad:
     print(f"  FAIL: {b}")
 if not bad:
-    print(f"  ok  : all {calls} build calls and both uploads use each leg's own key; every build gets the leg's team, every Direct build its profile choice")
+    print(f"  ok  : all {calls} build calls and all three uploads use each leg's own key; every build gets the leg's team, every Direct build its profile choice")
 sys.exit(1 if bad else 0)
 PYASC
 
@@ -527,8 +550,9 @@ kc "_build-ios.yml"        .github/workflows/_build-ios.yml
 echo
 echo "== publish gate: a cancelled build must not publish =="
 # `!= 'failure'` alone lets a wedged/evicted build job through, shipping half a
-# release. 'skipped' stays permitted (a product without a leg of some kind).
-for pair in distribute:3 distribute-alpha:3 distribute-release:1; do
+# release. 'skipped' stays permitted (a product without a leg of some kind). A
+# release has the same three build jobs: its legs ship together.
+for pair in distribute:3 distribute-alpha:3 distribute-release:3; do
   wf="${pair%%:*}"; want="${pair##*:}"
   g="$(grep -c "result != 'cancelled'" "$W/$wf.yml")"
   [ "$g" -eq "$want" ] && pass "$wf.yml excludes cancelled for all $want build job(s)" \
@@ -1026,6 +1050,71 @@ for c in size nosize 404; do
 done
 gr "$GR" download-prefix "" "$ZIP"
 err "an empty tag fails" "no tag for the download URL"
+cd "$ROOT" || exit 1
+rm -rf "$T"
+
+echo
+echo "== testflight-upload.sh: every app-store leg, with its own key =="
+python3 - "$W" <<'PYREL' || FAIL=1
+import re, sys
+text = open(f"{sys.argv[1]}/distribute-release.yml").read()
+job = text[text.index("\n  publish-release:\n"):]
+names = re.findall(r"^      - name: (.+)$", job, re.M)
+upload, s3 = names.index("Upload to TestFlight (per app-store leg)"), names.index("Upload DMG + ZIP to S3")
+bad = [] if upload < s3 else ["a release must upload to TestFlight before anything Direct moves"]
+if "(needs.build-ios.result == 'success' || needs.build-mac-store.result == 'success' || needs.build-mac-direct.result == 'success')" not in job[:job.index("    runs-on:")]:
+    bad.append("a store-only release must reach publish-release: it needs one successful build, not the Direct one")
+steps = {b.splitlines()[0]: b for b in re.split(r"\n      - name: ", job)[1:]}
+for n in ("Download mac-direct-build artifacts", "Install AWS CLI", "Upload DMG + ZIP to S3", "Upload Changelog.json to S3"):
+    if "if: needs.build-mac-direct.result == 'success'\n" not in steps[n]:
+        bad.append(f"'{n}' must not run for a store-only release, which has no AWS secrets")
+for b in bad:
+    print(f"  FAIL: {b}")
+if not bad:
+    print("  ok  : a release uploads to TestFlight first, reaches publish without a Direct leg, and runs Direct's steps only with one")
+sys.exit(1 if bad else 0)
+PYREL
+TF="$ROOT/.github/scripts/testflight-upload.sh"
+T=$(mktemp -d); mkdir -p "$T/bin" "$T/home"
+mkdir -p "$T/work/artifacts/ios/ios-build-a-ios-app-store" "$T/work/artifacts/ios/ios-build-a-tvos-app-store" "$T/work/artifacts/mac-store/mac-store-build-a-macos-app-store"
+: > "$T/work/artifacts/ios/ios-build-a-ios-app-store/a.ipa"
+: > "$T/work/artifacts/ios/ios-build-a-tvos-app-store/a.ipa"
+: > "$T/work/artifacts/mac-store/mac-store-build-a-macos-app-store/a.pkg"
+cat > "$T/bin/xcrun" <<'SH'
+#!/bin/sh
+echo "xcrun $*" >> "$STUB_LOG"
+echo "${ALTOOL_SAYS:-UPLOAD SUCCEEDED}"
+exit "${ALTOOL_RC:-0}"
+SH
+chmod +x "$T/bin/xcrun"
+tleg() { # platform channel build [distribute] [asc-key] [product]
+  printf '{"leg":"%s-%s-%s","platform":"%s","channel":"%s","distribute":%s,"build":"%s","asc-key":"%s"}' "${6:-a}" "$1" "$2" "$1" "$2" "${4:-true}" "$3" "${5:-}"
+}
+tf() { : > "$T/log"; CAP PATH="$T/bin:$PATH" HOME="$T/home" STUB_LOG="$T/log" ASC_KEY_ID=K ASC_ISSUER_ID=I ASC_KEY_BASE64=a2V5 ASC_KEY_ID_ALT=KA ASC_ISSUER_ID_ALT=IA ASC_KEY_ALT_BASE64=YWx0 "$@" "$TF"; }
+types() { grep -oE -- '--type [a-z]+' "$T/log" | cut -d' ' -f2 | tr '\n' ' '; }
+IOS=$(tleg ios app-store ios); TV=$(tleg tvos app-store ios); MAS=$(tleg macos app-store mac-store)
+cd "$T/work" || exit 1
+tf LEGS_JSON="[$IOS,$TV,$MAS,$(tleg macos direct mac-direct),$(tleg ios ad-hoc ios)]"
+{ [ "$RC" -eq 0 ] && [ "$(types)" = "ios appletvos macos " ]; } \
+  && pass "each app-store leg uploads with its platform's type; Direct and Ad Hoc don't upload" || bad "uploaded: $(types)"
+grep -qF -- '--file ./artifacts/mac-store/mac-store-build-a-macos-app-store/a.pkg --apiKey K --apiIssuer I' "$T/log" \
+  && pass "a Mac leg uploads its .pkg with the default key" || bad "Mac upload: $(cat "$T/log")"
+[ "$(cat "$T/home/.appstoreconnect/private_keys/AuthKey_K.p8")" = "key" ] && pass "altool finds the key where it looks" || bad "no AuthKey_K.p8"
+tf LEGS_JSON="[$(tleg ios app-store ios false)]"
+{ [ "$RC" -eq 0 ] && [ ! -s "$T/log" ]; } && pass "\"distribute\": false builds without uploading" || bad "a distribute=false leg uploaded"
+tf LEGS_JSON="[$(tleg ios app-store ios true alt)]"
+grep -qF -- '--apiKey KA --apiIssuer IA' "$T/log" && pass "an \"asc-key\": \"alt\" leg uploads with the *_ALT key" || bad "alt upload: $(cat "$T/log")"
+tf ASC_KEY_ID_ALT= ASC_ISSUER_ID_ALT= LEGS_JSON="[$(tleg ios app-store ios true alt)]"
+{ [ "$RC" -ne 0 ] && [ ! -s "$T/log" ] && grep -qF '::error::No App Store Connect key for leg a-ios-app-store' <<<"$OUT"; } \
+  && pass "an alt leg without the *_ALT key fails, never falls back to the default key" || bad "alt leg without its key"
+tf LEGS_JSON="[$(tleg ios app-store ios true '' missing)]"
+{ [ "$RC" -ne 0 ] && grep -qF '::error::No .ipa for leg missing-ios-app-store' <<<"$OUT"; } && pass "a missing artifact fails" || bad "missing artifact"
+tf LEGS_JSON='not json'
+[ "$RC" -ne 0 ] && pass "unreadable legs fail, instead of going green with nothing uploaded" || bad "bad LEGS_JSON passed"
+tf ALTOOL_RC=31 ALTOOL_SAYS="ERROR: Redundant Binary Upload (ITMS-90189)" LEGS_JSON="[$IOS,$MAS]"
+{ [ "$RC" -eq 0 ] && [ "$(types)" = "ios macos " ]; } && pass "a redundant upload (a re-run) counts as landed and moves on" || bad "ITMS-90189: $(types)"
+tf ALTOOL_RC=31 ALTOOL_SAYS="value that has already been used (-19232)" LEGS_JSON="[$IOS,$MAS]"
+{ [ "$RC" -ne 0 ] && [ "$(types)" = "ios " ]; } && pass "a rejected upload fails the step at that leg" || bad "-19232: rc=$RC $(types)"
 cd "$ROOT" || exit 1
 rm -rf "$T"
 

@@ -1,4 +1,4 @@
-# Migrating to v0.6.7
+# Migrating to v0.6.8
 
 v0.6 changes four things an app repo holds:
 
@@ -7,17 +7,18 @@ v0.6 changes four things an app repo holds:
 - the secrets
 - the runner variables
 
-This guide takes an app from any earlier line to **`LeanBytes/workflows-apple` v0.6.7**. Up to v0.6.4 this repo was `LeanBytes/workflows-macos`; every path below ends with the new name in your `uses:` lines. Find your starting point in the `uses:` line of your shells (`…/distribute-beta.yml@v0.5.9` means v0.5).
+This guide takes an app from any earlier line to **`LeanBytes/workflows-apple` v0.6.8**. Up to v0.6.4 this repo was `LeanBytes/workflows-macos`; every path below ends with the new name in your `uses:` lines. Find your starting point in the `uses:` line of your shells (`…/distribute-beta.yml@v0.5.9` means v0.5).
 
 | You are on | Go to |
 |---|---|
-| `LeanBytes/workflows-macos` v0.6.x | [From workflows-macos v0.6](#from-workflows-macos-v06): a new address only |
+| `LeanBytes/workflows-apple` v0.6.x | [From workflows-apple v0.6](#from-workflows-apple-v06): the release shell of a product with an App Store leg |
+| `LeanBytes/workflows-macos` v0.6.x | [From workflows-macos v0.6](#from-workflows-macos-v06): a new address, then the step above |
 | `LeanBytes/workflows-macos` v0.5.x | [From v0.5](#from-v05) |
 | `LeanBytes/workflows-macos` v0.4.x (latest v0.4.9) | [From v0.4](#from-v04), then the v0.5 steps |
 | `LeanBytes/workflows-macos` v0.3.x (latest v0.3.50) | [From v0.3](#from-v03), then the v0.5 steps |
 | `LeanBytes/workflows-ios`, any version | [From workflows-ios](#from-workflows-ios) |
 
-**Pin `LeanBytes/workflows-apple` v0.6.7, never workflows-macos v0.6.0.** Before v0.6.1 and v0.5.10, every tag checked out main's shared scripts instead of its own ([#34](https://github.com/LeanBytes/workflows-macos/issues/34)), and before v0.6.2 and v0.5.11 no Tuist install honored the app's pin ([#39](https://github.com/LeanBytes/workflows-macos/issues/39)).
+**Pin `LeanBytes/workflows-apple` v0.6.8, never workflows-macos v0.6.0.** Before v0.6.1 and v0.5.10, every tag checked out main's shared scripts instead of its own ([#34](https://github.com/LeanBytes/workflows-macos/issues/34)), and before v0.6.2 and v0.5.11 no Tuist install honored the app's pin ([#39](https://github.com/LeanBytes/workflows-macos/issues/39)).
 
 ## Broken since 2026-10-21? Unbreak first
 
@@ -28,7 +29,7 @@ Every shell pinned to workflows-macos v0.5.9 or older runs that repo's main scri
   - beta and release shells: `runs-on-build-direct` and `runs-on-build-store`, with the same value for both.
   - alpha shell: `runs-on-build-direct`.
   - The PR shell keeps `runs-on-build`.
-- **v0.3.x:** there is no quick fix. v0.4 introduced the product files, so migrate to v0.6.7 straight away.
+- **v0.3.x:** there is no quick fix. v0.4 introduced the product files, so migrate to v0.6.8 straight away.
 - **Tuist app (`use-tuist: true`), any line:** since 2026-10-22 the Tuist install fails with `no versions found for tuist`. v0.5.11 and v0.6.2 install the version the app pins, so commit a `mise.toml` at the repo root if it has none:
 
   ```toml
@@ -38,15 +39,38 @@ Every shell pinned to workflows-macos v0.5.9 or older runs that repo's main scri
 
   A pin you already have works as it is. A `[tool_alias.tuist.versions]` block that maps `latest` to the pin is no longer needed.
 
+## From workflows-apple v0.6
+
+In v0.6.8 the tag is the release for every product. It builds the Direct and App Store legs from one commit with one build number, and you submit the tag's build. So a version can't ship without its tag, and the build you submit and the build Sparkle users get were made together, however long after the last beta you release.
+
+**A product with an App Store leg** changes its `distribute-release.yml` shell, or copies the template if it has none. A release runs the shell at the tag's own commit, so commit this before you push the next tag.
+
+1. Pass the App Store certificates. Without them that build fails, and then nothing is published, Direct included:
+
+   ```yaml
+   secrets:
+     APPLE_DISTR_P12_BASE64: ${{ secrets.APPLE_DISTR_P12_BASE64 }}
+     APPLE_DISTR_PASSWORD:   ${{ secrets.APPLE_DISTR_PASSWORD }}
+     MAC_DISTR_P12_BASE64:   ${{ secrets.MAC_DISTR_P12_BASE64 }}   # Mac App Store legs
+     MAC_DISTR_PASSWORD:     ${{ secrets.MAC_DISTR_PASSWORD }}
+   ```
+
+2. Give it the runners its `distribute.yml` shell has: `runs-on-build-mac-store`, and `runs-on-build-ios` for an iPhone, iPad or Apple TV leg. They default to `["self-hosted","macOS"]`, so in a repo with hosted runners the job would wait forever without failing.
+3. A leg with `cert-secret` or `"asc-key": "alt"` needs those secrets in this shell too.
+
+**Shipping changes:** push the tag first, then submit the tag's build. See [From push to App Store review](#from-push-to-app-store-review).
+
+A product with only Direct or Ad Hoc legs changes nothing.
+
 ## From workflows-macos v0.6
 
-Same code, new address. In every shell, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.7`:
+Same code, new address. In every shell, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.8`:
 
 ```yaml
-uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.7
+uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.8
 ```
 
-Product files, inputs, secrets and variables stay as they are. In the first run, **Checkout shared scripts** names `LeanBytes/workflows-apple`.
+Product files, inputs and variables stay as they are. In the first run, **Checkout shared scripts** names `LeanBytes/workflows-apple`. A product with an App Store leg then also needs the [release shell change](#from-workflows-apple-v06).
 
 ## Before you start (every path)
 
@@ -78,7 +102,7 @@ Product files, inputs, secrets and variables stay as they are. In the first run,
 
 Each channel becomes a *leg* under `platforms`. The value your app actually used is the product file's key if it has one, else the input in your shell, else the old default (`build-direct` on, everything else off). Shell inputs that set a channel move into the product file too; see [step 2](#2-shells).
 
-| v0.5 key | v0.6.7 |
+| v0.5 key | v0.6.8 |
 |---|---|
 | `platform` | Delete it. The platform is the key under `platforms`. |
 | `build-direct` | `"platforms": {"macos": {"direct": {}}}` |
@@ -127,7 +151,7 @@ Before (v0.5), `Config/products/app.json`:
 
 …with `configuration-app-store: Release Store` in the beta and release shells.
 
-After (v0.6.7):
+After (v0.6.8):
 
 ```json
 {
@@ -161,19 +185,19 @@ Keep `id` as it was. An empty or missing `id` keeps the bare `vX.Y.Z` and `vX.Y.
 
 The quickest route is to copy the four templates from [`examples/per-app/`](examples/per-app/) and re-apply your own inputs.
 
-- **`distribute-beta.yml` becomes `distribute.yml`.** Rename your shell file too, and point `uses:` at `LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.7`.
+- **`distribute-beta.yml` becomes `distribute.yml`.** Rename your shell file too, and point `uses:` at `LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.8`.
   - Its `workflow_dispatch` input `force-beta` is now `force`.
   - Its `permissions` add `actions: read`: an app without a Direct leg compares against the last successful run.
-- **`distribute-pr.yml`, `distribute-release.yml`, `distribute-alpha.yml`, `nightly-tests.yml`, `nightly-memory-watch.yml`** keep their names. Point them at `LeanBytes/workflows-apple` and `@v0.6.7`.
+- **`distribute-pr.yml`, `distribute-release.yml`, `distribute-alpha.yml`, `nightly-tests.yml`, `nightly-memory-watch.yml`** keep their names. Point them at `LeanBytes/workflows-apple` and `@v0.6.8`.
 
 Inputs that changed:
 
-| v0.5 input | Shell | v0.6.7 |
+| v0.5 input | Shell | v0.6.8 |
 |---|---|---|
 | `runs-on-build-direct` | beta, release, alpha | `runs-on-build-mac-direct` |
 | `runs-on-build-store` | beta | `runs-on-build-mac-store` |
-| `runs-on-build-store` | release | Delete it: a release builds only the Direct leg. |
-| — | distribute, alpha | `runs-on-build-ios`, new: the iPhone/iPad archive. The alpha shell also gains `runs-on-build-mac-store`. |
+| `runs-on-build-store` | release | `runs-on-build-mac-store` |
+| — | distribute, release, alpha | `runs-on-build-ios`, new: the iPhone/iPad archive. The alpha shell also gains `runs-on-build-mac-store`. |
 | `force-beta` | beta | `force` |
 | `build-direct`, `build-app-store` | beta, release | the legs in the product file |
 | `distribute-app-store` | beta, release | `"distribute"` on the `app-store` leg (default `true`) |
@@ -219,7 +243,7 @@ permissions:
   actions: read
 jobs:
   distribute:
-    uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.8
     with:
       force: ${{ inputs.force || false }}
       runs-on-build-mac-direct: '"macos-26"'
@@ -239,7 +263,7 @@ The rest keep their names. What changed per shell:
 | Shell | Change |
 |---|---|
 | `distribute.yml` | The same certificates as the beta shell had. `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_BASE64` now also download the profiles, so the key must be Admin. |
-| `distribute-release.yml` | Drop `APPLE_DISTR_*` and `MAC_DISTR_*`: a release rebuilds only the Direct leg. |
+| `distribute-release.yml` | Keep `APPLE_DISTR_*` and `MAC_DISTR_*`: the tag still builds the App Store legs. |
 | `distribute-alpha.yml` | Add `APPLE_DISTR_P12_BASE64`, `APPLE_DISTR_PASSWORD`, `MAC_DISTR_P12_BASE64`, `MAC_DISTR_PASSWORD` if the product has an `app-store` leg: an alpha builds every leg. |
 | `distribute-pr.yml` | Nothing; it signs nothing. |
 
@@ -279,10 +303,10 @@ The old names are no longer read, so rename them or a job moves back to the shel
 
 ### 5. What changes in behaviour
 
-- **App Store builds get no tags.** An `app-store` leg uploads to TestFlight with the bare version `X.Y.Z` and a timestamp build number.
+- **App Store pushes get no tags.** An `app-store` leg uploads to TestFlight with the bare version `X.Y.Z` and a timestamp build number.
   - A product without a Direct leg builds when a push changes its product file or one of its `source-paths` since the last successful run.
   - A product with a Direct leg keeps the Direct beta counter: each `-beta.N` push also uploads a TestFlight build of the same commit.
-- **The release tag rebuilds only the Direct leg.** That covers the stable appcast, `Changelog.json` and the GitHub Release. It no longer builds or uploads anything to the App Store. See [From push to App Store review](#from-push-to-app-store-review).
+- **The release tag builds the Direct leg and its App Store legs**, from one commit with one build number. The Direct leg gets the stable appcast, `Changelog.json` and the GitHub Release, and the App Store legs go to TestFlight first. You submit that build. See [From push to App Store review](#from-push-to-app-store-review).
 - **An alpha builds every leg of one product.**
   - `app-store` legs upload as internal-only TestFlight builds, which can't go to external testers or to review.
   - Direct and Ad Hoc legs go to an unlisted `alpha/<label>/` S3 prefix.
@@ -298,7 +322,7 @@ The old names are no longer read, so rename them or a job moves back to the shel
 1. Run `products.py discover` locally (see [Before you start](#before-you-start-every-path)). It must print the legs without an error.
 2. Open a PR. `distribute-pr` compiles one job per leg.
 3. After merging, open the first `distribute` run:
-   - In **Checkout shared scripts**, the log shows `LeanBytes/workflows-apple` at the v0.6.7 commit, never `Default branch 'main'`.
+   - In **Checkout shared scripts**, the log shows `LeanBytes/workflows-apple` at the v0.6.8 commit, never `Default branch 'main'`.
    - **Download provisioning profiles** lists every bundle ID of the leg. A leg with `"profile": false` says it signs without one, and **Export** lists each bundle's entitlement check.
 4. Delete the `PROV_PROF_*` secrets.
 
@@ -323,7 +347,7 @@ v0.3.50 kept the app's identity in repository variables, the changelog in `Confi
 
 **1. Create `Config/products/app.json`** without an `id`, so the existing `vX.Y.Z` and `vX.Y.Z-beta.N` tags keep counting.
 
-| v0.3 | v0.6.7 |
+| v0.3 | v0.6.8 |
 |---|---|
 | Variable `SCHEME_NAME` | `"scheme"` |
 | Variable `PRODUCT_NAME` | `"product-name"` |
@@ -337,10 +361,10 @@ v0.3.50 kept the app's identity in repository variables, the changelog in `Confi
 
 If the app bundles `Config/Changelog.json` for its What's New view, read the product file's `changelog` object instead. The schema is the same. On release, CI still publishes it to S3 as `Changelog.json`, and the S3 paths don't change: `S3_DISTRIBUTION_PATH`/`<file>` without an `s3-subpath`.
 
-**2. Shells:** start from the v0.6.7 templates, then follow the [v0.5 shell steps](#2-shells) and the [v0.4 runner notes](#from-v04).
+**2. Shells:** start from the v0.6.8 templates, then follow the [v0.5 shell steps](#2-shells) and the [v0.4 runner notes](#from-v04).
 - `changelog-path` is gone.
 - The PR shell's `scheme-name` is gone: the scheme comes from the product file.
-- **Runners: v0.3 defaulted to GitHub-hosted `macos-26`, v0.6.7 defaults to `["self-hosted","macOS"]`.** To stay on hosted runners, set every `runs-on-*` input to `'"macos-26"'`, prepare and discover included.
+- **Runners: v0.3 defaulted to GitHub-hosted `macos-26`, v0.6.8 defaults to `["self-hosted","macOS"]`.** To stay on hosted runners, set every `runs-on-*` input to `'"macos-26"'`, prepare and discover included.
 
 **3. Secrets and variables:** as in [v0.5](#3-secrets). After the first green run, delete the identity variables (`SCHEME_NAME`, `SCHEME_NAME_STORE`, `PRODUCT_NAME`, `BUNDLE_ID*`); nothing reads them since v0.4.
 
@@ -350,7 +374,7 @@ The iPhone/iPad workflows moved into this repo, so the shells now call `LeanByte
 
 **Product file:** `channel` becomes a leg under `platforms.ios`.
 
-| workflows-ios | v0.6.7 |
+| workflows-ios | v0.6.8 |
 |---|---|
 | `"channel": "app-store"` | `"platforms": {"ios": {"app-store": {}}}` |
 | `"channel": "ad-hoc"` | `"platforms": {"ios": {"ad-hoc": {}}}` |
@@ -360,11 +384,11 @@ The iPhone/iPad workflows moved into this repo, so the shells now call `LeanByte
 
 An app on the iPhone and the Mac is one product with both platforms. A Mac leg that needs another scheme says so: `"macos": {"app-store": {"scheme": "MyAppMac"}}`.
 
-**Shells:** copy the v0.6.7 templates.
+**Shells:** copy the v0.6.8 templates.
 - `distribute-beta.yml` (v0.2.0) and `distribute.yml` (v0.4.0) both become workflows-apple `distribute.yml`, with `actions: read` in its permissions.
-- `distribute-release.yml` is only needed once the product has a Direct leg. Without one, a release tag just marks the version as shipped.
+- `distribute-release.yml` is new for an app with an `app-store` leg: its version tag now builds the release. Give it the same certificates and `runs-on-build-ios`. An Ad Hoc app doesn't need it: a bare tag alone stops that version from building.
 
-| workflows-ios input | v0.6.7 |
+| workflows-ios input | v0.6.8 |
 |---|---|
 | `distribute` | `"distribute"` on the leg |
 | `configuration` | `"configuration"` in the product file |
@@ -383,7 +407,7 @@ All other inputs keep their names.
 - The Ad Hoc S3 location is unchanged (`<S3_DISTRIBUTION_PATH>/<bundle-id>/app.ipa` and `manifest.plist`), so existing install links keep working.
 - The bare `vX.Y.Z` release markers still stop a version from building.
 
-**What changes:** workflows-ios tagged every build. v0.6.7 writes no such tags and doesn't read the old ones. The first push after migrating builds, because it changes the product file.
+**What changes:** workflows-ios tagged every build. v0.6.8 writes no such tags and doesn't read the old ones. The first push after migrating builds, because it changes the product file.
 
 ## Serve Sparkle updates from GitHub Releases
 
@@ -411,11 +435,11 @@ What stays: the DMG, ZIP, appcast and `Changelog.json` still go to S3, and the r
 
 1. **Push a change.** `distribute` uploads `X.Y.Z (build)` to TestFlight. With a TestFlight internal group set to automatic distribution, your testers get it right away.
 2. **External testers (optional):** in App Store Connect → TestFlight, add the build to an external group. The first build of a version goes through Beta App Review.
-3. **Submit:**
+3. **Push the tag:** `vX.Y.Z` (`<id>-vX.Y.Z` for a product with an `id`).
+   - It builds every App Store leg and the Direct leg from that commit, with one build number. The App Store builds land in TestFlight. A Direct build goes to Sparkle users at once, so push the tag when you want it out.
+   - The upload comes first. If App Store Connect rejects it, for example because that version is already approved, nothing is published.
+4. **Submit:**
    1. In App Store Connect, open the app's version `X.Y.Z` for the platform. Create it if it doesn't exist yet.
-   2. Under Build, pick the tested build.
+   2. Under Build, pick the tag's build. The run summary names it.
    3. Choose Add for Review, then Submit.
-4. **Mark it shipped:** push the tag `vX.Y.Z` (`<id>-vX.Y.Z` for a product with an `id`).
-   - From then on that version builds no more. If review rejects it, keep pushing fixes *before* the tag and resubmit a newer build.
-   - For a product with a Direct leg, the tag also releases the Direct build to Sparkle users at once. Push it when you want both out.
-5. **Start the next version** by adding a new first entry to `changelog.versions`.
+5. **Start the next version** by adding a new first entry to `changelog.versions`. A fix for a rejected review ships this way too: the tag has stopped that version from building.

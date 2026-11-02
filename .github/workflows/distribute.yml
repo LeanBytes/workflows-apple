@@ -10,9 +10,9 @@
 # this workflow on main when it hasn't (so a failed run is picked up by the
 # next push).
 #
-#   * App Store legs (iPhone, iPad, Mac) go to TestFlight. No tag, no release:
-#     the build tested in TestFlight is the build you submit in App Store
-#     Connect.
+#   * App Store legs (iPhone, iPad, Mac) go to TestFlight, for your testers. No
+#     tag: your release tag builds them again, and that's the build you submit
+#     in App Store Connect.
 #   * Ad Hoc legs (iPhone, iPad) put an IPA + manifest on S3, live at once.
 #   * Direct legs (Mac) go to S3 and the Sparkle beta feed, and the product
 #     pushes its own `<prefix><ver>-beta.N` tag + a pre-release.
@@ -41,7 +41,7 @@
 #         force: { description: "Build even if nothing changed", type: boolean, default: false }
 #   jobs:
 #     distribute:
-#       uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.7
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.8
 #       with:
 #         force: ${{ inputs.force || false }}
 #       secrets:
@@ -284,7 +284,7 @@ jobs:
   test:
     if: inputs.run-tests
     needs: prepare
-    uses: LeanBytes/workflows-apple/.github/workflows/_test.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/_test.yml@v0.6.8
     with:
       test-runner: ${{ inputs.test-runner }}
       runs-on: ${{ inputs.runs-on-test }}
@@ -317,7 +317,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.ios-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.8
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -355,7 +355,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-store-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.8
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -392,7 +392,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-direct-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.8
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -551,42 +551,7 @@ jobs:
           ASC_KEY_ID_ALT: ${{ secrets.ASC_KEY_ID_ALT }}
           ASC_ISSUER_ID_ALT: ${{ secrets.ASC_ISSUER_ID_ALT }}
           ASC_KEY_ALT_BASE64: ${{ secrets.ASC_KEY_ALT_BASE64 }}
-        run: |
-          set -uo pipefail
-          source .shared-ci/.github/scripts/classify-upload.sh
-          # altool reads the keys from here; Cleanup removes them. A leg with
-          # "asc-key": "alt" uploads with the *_ALT key, into that team's app.
-          mkdir -p ~/.appstoreconnect/private_keys
-          [ -z "$ASC_KEY_ID" ] || (umask 077; echo "$ASC_KEY_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8)
-          [ -z "$ASC_KEY_ID_ALT" ] || (umask 077; echo "$ASC_KEY_ALT_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID_ALT}.p8)
-          ALT_LEGS=" $(python3 -c 'import json, sys; print(" ".join(l["leg"] for l in json.loads(sys.argv[1]) if l.get("asc-key") == "alt"))' "$LEGS_JSON") "
-          while IFS=$'\x1f' read -r leg id pname plat chan dist bid sub afile aseed acast label mkt kind; do
-            [ "$chan" = "app-store" ] || continue
-            [ "$dist" = "True" ] || { echo "leg $leg: distribute=false — skipping upload"; continue; }
-            echo "::group::TestFlight upload — $leg"
-            if [[ "$ALT_LEGS" == *" $leg "* ]]; then KEY=$ASC_KEY_ID_ALT; ISSUER=$ASC_ISSUER_ID_ALT; else KEY=$ASC_KEY_ID; ISSUER=$ASC_ISSUER_ID; fi
-            if [ -z "$KEY" ]; then
-              echo "::error::No App Store Connect key for leg $leg"; echo "::endgroup::"; exit 1
-            fi
-            case "$plat" in ios) ext=ipa; type=ios ;; tvos) ext=ipa; type=appletvos ;; *) ext=pkg; type=macos ;; esac
-            FILE=$(ls ./artifacts/$kind/$kind-build-$leg/*.$ext 2>/dev/null | head -1 || true)
-            if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
-              echo "::error::No .$ext for leg $leg"; echo "::endgroup::"; exit 1
-            fi
-            # errexit off around the capture: a non-zero altool exit must reach
-            # the classifier below, not abort the step.
-            set +e
-            OUTPUT=$(xcrun altool --upload-app --type "$type" --file "$FILE" \
-              --apiKey "$KEY" --apiIssuer "$ISSUER" 2>&1)
-            RC=$?
-            set -e
-            echo "$OUTPUT"
-            case "$(classify_upload "$RC" "$OUTPUT")" in
-              accepted)        echo "TestFlight upload accepted for $leg"; echo "::endgroup::"; continue ;;
-              already-present) echo "Build for $leg already present — treating as success."; echo "::endgroup::"; continue ;;
-            esac
-            echo "::error::altool failed for $leg (exit ${RC})"; echo "::endgroup::"; exit 1
-          done < /tmp/legs.tsv
+        run: .shared-ci/.github/scripts/testflight-upload.sh
 
       - name: Install AWS CLI
         if: needs.build-mac-direct.result == 'success' || contains(needs.prepare.outputs.ios-legs, '"channel":"ad-hoc"')
@@ -730,7 +695,7 @@ jobs:
 
       # ── Per Direct product: push its beta tag + pre-release (+ its assets) ─
       # LAST, so a failed upload never leaves a tag claiming the build shipped.
-      # App Store and Ad Hoc builds get no tag: a tag marks a build that reaches
+      # App Store and Ad Hoc builds get no beta tag: it marks a build that reaches
       # customers on its own, and a TestFlight upload doesn't.
       #
       # With appcast-downloads-from-github the step before the appcast does this
@@ -771,8 +736,8 @@ jobs:
             done < /tmp/legs.tsv
             if [ -n "$testflight" ]; then
               echo
-              echo "To ship a TestFlight build: in App Store Connect, add build \`${BUILD_NUMBER}\` to the"
-              echo "version and submit it for review. Once it is approved, bump the product's changelog version."
+              echo "To ship: push the product's release tag, which builds the App Store legs again from that"
+              echo "commit. In App Store Connect, add that build to the version and submit it for review."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
