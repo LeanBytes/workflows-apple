@@ -3,9 +3,10 @@
 # orchestrator discovers Config/products/<id>.json and builds every leg (one per
 # platform and channel) of each product whose version is unreleased and that
 # changed:
-#   * App Store legs (iPhone, iPad, Mac) → TestFlight. No tag: you submit the
-#     build you tested in App Store Connect. They build when something changed
-#     since the last successful run, so a failed run is picked up by the next.
+#   * App Store legs (iPhone, iPad, Mac) → TestFlight, for your testers. No tag.
+#     They build when something changed since the last successful run, so a
+#     failed run is picked up by the next. Your release tag builds them again,
+#     and that's the build you submit.
 #   * Ad Hoc legs (iPhone, iPad) → IPA + manifest on S3.
 #   * Direct legs (Mac) → S3, the Sparkle beta feed, a <prefix><ver>-beta.N tag
 #     and a pre-release.
@@ -36,7 +37,7 @@ permissions:
 
 jobs:
   distribute:
-    uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.8
     # `secrets: inherit` only works same-org; the explicit list works universally.
     # One list for every app: a secret a leg doesn't use is simply never read.
     # No provisioning profiles — the App Store Connect key downloads them.

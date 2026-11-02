@@ -5,25 +5,29 @@
 #
 # `products.py plan-release` parses the tag → the single target product,
 # validates the version against THAT product's inline changelog, and returns
-# its Direct leg. Only Direct builds again: a Direct binary carries its version,
-# and stable users must never get one that says beta. App Store legs build
-# nothing — the build you tested in TestFlight is the one you submit in App
-# Store Connect — so for a product without a Direct leg the tag is just the
-# marker of what shipped, and this run ends green after the check.
+# its Direct and App Store legs. The tag is the release, whatever the product
+# ships through: everything builds from that commit with one build number, and
+# you submit the tag's build in App Store Connect. So a version can't ship
+# without its tag, and the build you submit and the build Sparkle users get were
+# made together. Direct has to build here anyway: a Direct binary carries its
+# version, and stable users must never get one that says beta. Ad Hoc legs go
+# live on every push, so a product with nothing else builds nothing here.
 #
 # Strict fail-safe publish order — the GH Release is created LAST:
 #   1. Read notes from the product's inline changelog
-#   2. S3 upload of DMG/ZIP          (silent)
-#   3. S3 upload of the product's Changelog.json (extracted from its file)
-#   4. Stable appcast update         (if the direct leg sets "appcast": true) ← visible
-#   5. gh release create             (for the tag)
-#   6. gh release upload (DMG + ZIP)
+#   2. altool → App Store Connect for every app-store leg  ← GATE 1
+#   3. S3 upload of DMG/ZIP          (silent)
+#   4. S3 upload of the product's Changelog.json (extracted from its file)
+#   5. Stable appcast update         (if the direct leg sets "appcast": true) ← visible
+#   6. gh release create             (for the tag)
+#   7. gh release upload (DMG + ZIP)
+# Without a Direct leg that leaves steps 1, 2 and 6: a release with notes only.
 #
 # With appcast-downloads-from-github the new appcast item points at the GH
-# Release's ZIP, so the release can't come last. After steps 1-3:
-#   4. gh release create + upload (DMG + ZIP), re-runnable
-#   5. Check GitHub serves the ZIP   (a failure stops the run; the appcast stays)
-#   6. Stable appcast update         (--download-url-prefix) ← visible
+# Release's ZIP, so the release can't come last. After steps 1-4:
+#   5. gh release create + upload (DMG + ZIP), re-runnable
+#   6. Check GitHub serves the ZIP   (a failure stops the run; the appcast stays)
+#   7. Stable appcast update         (--download-url-prefix) ← visible
 #
 # Per-app shell (the full one is examples/per-app/distribute-release.yml):
 #
@@ -36,7 +40,7 @@
 #         - '!*-alpha.*'
 #   jobs:
 #     release:
-#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.7
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.8
 #       secrets:
 #         DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
 #         # …
@@ -81,6 +85,14 @@ on:
         description: "Ceiling for the Archive step inside the build job. Must stay under build-timeout-minutes."
         type: number
         default: 30
+      runs-on-build-ios:
+        description: "Runner for the iPhone, iPad and Apple TV archive."
+        type: string
+        default: '["self-hosted","macOS"]'
+      runs-on-build-mac-store:
+        description: "Runner for the Mac App Store archive. Must be a released Xcode — altool rejects a bundle whose Info.plist records a beta (error 90301), and that keys off the archiving Xcode, not the uploader."
+        type: string
+        default: '["self-hosted","macOS"]'
       runs-on-build-mac-direct:
         description: "Runner for the Developer ID (Direct) archive."
         type: string
@@ -119,11 +131,17 @@ on:
     # Declared so cross-org / cross-account callers (where `secrets: inherit`
     # silently passes nothing) can pass secrets explicitly.
     secrets:
+      APPLE_DISTR_P12_BASE64:         { required: false }
+      APPLE_DISTR_PASSWORD:           { required: false }
+      MAC_DISTR_P12_BASE64:           { required: false }
+      MAC_DISTR_PASSWORD:             { required: false }
       DEVELOPER_ID_P12_BASE64:        { required: false }
       DEVELOPER_ID_PASSWORD:          { required: false }
       # A leg can sign with another certificate (e.g. a legacy team kept after
       # an account transfer) by naming these in "cert-secret" /
       # "cert-password-secret". Unset falls back to the team's own.
+      APPLE_DISTR_P12_ALT_BASE64:     { required: false }
+      APPLE_DISTR_PASSWORD_ALT:       { required: false }
       DEVELOPER_ID_P12_ALT_BASE64:    { required: false }
       DEVELOPER_ID_PASSWORD_ALT:      { required: false }
       KEYCHAIN_PASSWORD:              { required: false }
@@ -157,7 +175,11 @@ jobs:
       build-number: ${{ steps.plan.outputs.build-number }}
       artifact-label: ${{ steps.plan.outputs.artifact-label }}
       legs: ${{ steps.plan.outputs.legs }}
+      ios-legs: ${{ steps.plan.outputs.ios-legs }}
+      mac-store-legs: ${{ steps.plan.outputs.mac-store-legs }}
       mac-direct-legs: ${{ steps.plan.outputs.mac-direct-legs }}
+      has-ios: ${{ steps.plan.outputs.has-ios }}
+      has-mac-store: ${{ steps.plan.outputs.has-mac-store }}
       has-mac-direct: ${{ steps.plan.outputs.has-mac-direct }}
       has-appcast: ${{ steps.plan.outputs.has-appcast }}
     steps:
@@ -184,6 +206,81 @@ jobs:
       - name: Show target
         run: echo "Releasing '${{ steps.plan.outputs.target-id }}' v${{ steps.plan.outputs.version }} from tag '${{ github.ref_name }}' — Direct leg present ${{ steps.plan.outputs.has-mac-direct }}"
 
+  build-ios:
+    if: needs.prepare.outputs.has-ios == 'true'
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJSON(needs.prepare.outputs.ios-legs) }}
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.8
+    with:
+      post-build-script: ${{ inputs.post-build-script }}
+      job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
+      archive-timeout-minutes: ${{ inputs.archive-timeout-minutes }}
+      version: ${{ matrix.leg.marketing }}                 # bare X.Y.Z — ASC rejects suffixes
+      build-number: ${{ needs.prepare.outputs.build-number }}
+      artifact-name: ios-build-${{ matrix.leg.leg }}
+      scheme: ${{ matrix.leg.scheme }}
+      configuration: ${{ matrix.leg.configuration }}
+      destination: ${{ matrix.leg.destination }}            # iPhone/iPad or Apple TV
+      team: ${{ matrix.leg.team }}
+      profile-type: ${{ matrix.leg.profile-type }}
+      export-method: ${{ matrix.leg.export-method }}
+      use-tuist: ${{ inputs.use-tuist }}
+      pre-build-cache-path: ${{ inputs.pre-build-cache-path }}
+      pre-build-cache-key: ${{ inputs.pre-build-cache-key }}
+      pre-build-script: ${{ inputs.pre-build-script }}
+      runs-on: ${{ inputs.runs-on-build-ios }}
+      extra-xcodebuild-args: ${{ inputs.extra-xcodebuild-args }}
+      lfs: ${{ inputs.lfs }}
+      artifact-retention-days: ${{ inputs.artifact-retention-days }}
+    secrets:
+      APPLE_DISTR_P12_BASE64:  ${{ matrix.leg.cert-secret != '' && secrets[matrix.leg.cert-secret] || secrets.APPLE_DISTR_P12_BASE64 }}
+      APPLE_DISTR_PASSWORD:    ${{ matrix.leg.cert-password-secret != '' && secrets[matrix.leg.cert-password-secret] || secrets.APPLE_DISTR_PASSWORD }}
+      KEYCHAIN_PASSWORD:       ${{ secrets.KEYCHAIN_PASSWORD }}
+      ASC_KEY_ID:              ${{ secrets[matrix.leg.asc-key == 'alt' && 'ASC_KEY_ID_ALT' || 'ASC_KEY_ID'] }}
+      ASC_ISSUER_ID:           ${{ secrets[matrix.leg.asc-key == 'alt' && 'ASC_ISSUER_ID_ALT' || 'ASC_ISSUER_ID'] }}
+      ASC_KEY_BASE64:          ${{ secrets[matrix.leg.asc-key == 'alt' && 'ASC_KEY_ALT_BASE64' || 'ASC_KEY_BASE64'] }}
+      SHARED_WORKFLOWS_TOKEN:  ${{ secrets.SHARED_WORKFLOWS_TOKEN }}
+
+  build-mac-store:
+    if: needs.prepare.outputs.has-mac-store == 'true'
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJSON(needs.prepare.outputs.mac-store-legs) }}
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.8
+    with:
+      post-build-script: ${{ inputs.post-build-script }}
+      job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
+      archive-timeout-minutes: ${{ inputs.archive-timeout-minutes }}
+      version: ${{ matrix.leg.marketing }}                 # bare X.Y.Z — ASC rejects suffixes
+      build-number: ${{ needs.prepare.outputs.build-number }}
+      artifact-name: mac-store-build-${{ matrix.leg.leg }}
+      scheme: ${{ matrix.leg.scheme }}
+      configuration: ${{ matrix.leg.configuration }}
+      team: ${{ matrix.leg.team }}
+      use-tuist: ${{ inputs.use-tuist }}
+      pre-build-cache-path: ${{ inputs.pre-build-cache-path }}
+      pre-build-cache-key: ${{ inputs.pre-build-cache-key }}
+      pre-build-script: ${{ inputs.pre-build-script }}
+      runs-on: ${{ inputs.runs-on-build-mac-store }}
+      extra-xcodebuild-args: ${{ inputs.extra-xcodebuild-args }}
+      lfs: ${{ inputs.lfs }}
+      artifact-retention-days: ${{ inputs.artifact-retention-days }}
+    secrets:
+      APPLE_DISTR_P12_BASE64:  ${{ matrix.leg.cert-secret != '' && secrets[matrix.leg.cert-secret] || secrets.APPLE_DISTR_P12_BASE64 }}
+      APPLE_DISTR_PASSWORD:    ${{ matrix.leg.cert-password-secret != '' && secrets[matrix.leg.cert-password-secret] || secrets.APPLE_DISTR_PASSWORD }}
+      MAC_DISTR_P12_BASE64:    ${{ secrets.MAC_DISTR_P12_BASE64 }}
+      MAC_DISTR_PASSWORD:      ${{ secrets.MAC_DISTR_PASSWORD }}
+      KEYCHAIN_PASSWORD:       ${{ secrets.KEYCHAIN_PASSWORD }}
+      ASC_KEY_ID:              ${{ secrets[matrix.leg.asc-key == 'alt' && 'ASC_KEY_ID_ALT' || 'ASC_KEY_ID'] }}
+      ASC_ISSUER_ID:           ${{ secrets[matrix.leg.asc-key == 'alt' && 'ASC_ISSUER_ID_ALT' || 'ASC_ISSUER_ID'] }}
+      ASC_KEY_BASE64:          ${{ secrets[matrix.leg.asc-key == 'alt' && 'ASC_KEY_ALT_BASE64' || 'ASC_KEY_BASE64'] }}
+      SHARED_WORKFLOWS_TOKEN:  ${{ secrets.SHARED_WORKFLOWS_TOKEN }}
+
   build-mac-direct:
     if: needs.prepare.outputs.has-mac-direct == 'true'
     needs: prepare
@@ -191,7 +288,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-direct-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.8
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -223,14 +320,18 @@ jobs:
       SHARED_WORKFLOWS_TOKEN:  ${{ secrets.SHARED_WORKFLOWS_TOKEN }}
 
   publish-release:
-    needs: [prepare, build-mac-direct]
-    # Only a built Direct leg publishes. 'cancelled' must not get through: a
-    # wedged or evicted build job would otherwise publish a release with the
-    # build silently missing (see #10).
+    needs: [prepare, build-ios, build-mac-store, build-mac-direct]
+    # Publishes when something built and nothing failed: the legs of a release
+    # ship together. 'skipped' must stay permitted (a product without a leg of some
+    # kind), 'cancelled' must not get through: a wedged or evicted build job would
+    # otherwise publish a release with the build silently missing (see #10).
     if: |
       always() &&
+      needs.prepare.result == 'success' &&
+      needs.build-ios.result != 'failure' && needs.build-ios.result != 'cancelled' &&
+      needs.build-mac-store.result != 'failure' && needs.build-mac-store.result != 'cancelled' &&
       needs.build-mac-direct.result != 'failure' && needs.build-mac-direct.result != 'cancelled' &&
-      needs.build-mac-direct.result == 'success'
+      (needs.build-ios.result == 'success' || needs.build-mac-store.result == 'success' || needs.build-mac-direct.result == 'success')
     # `vars.RUNS_ON_PUBLISH` overrides this with no commit — see README, "Moving a job
     # off the self-hosted Mac". Unset is '' (falsy), so the input is the default.
     runs-on: ${{ vars.RUNS_ON_PUBLISH || fromJSON(inputs.runs-on-publish) }}
@@ -257,7 +358,22 @@ jobs:
           path: .shared-ci
           token: ${{ secrets.SHARED_WORKFLOWS_TOKEN || github.token }}
 
+      - name: Download ios-build artifacts
+        if: needs.build-ios.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ios-build-*
+          path: ./artifacts/ios
+
+      - name: Download mac-store-build artifacts
+        if: needs.build-mac-store.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mac-store-build-*
+          path: ./artifacts/mac-store
+
       - name: Download mac-direct-build artifacts
+        if: needs.build-mac-direct.result == 'success'
         uses: actions/download-artifact@v8
         with:
           pattern: mac-direct-build-*
@@ -270,12 +386,14 @@ jobs:
           # \x1f (Unit Separator), NOT tab — tab is IFS-whitespace and `read`
           # would collapse empty fields (e.g. an empty s3-subpath), shifting
           # every later column. \x1f is non-whitespace and never in the data.
+          # Direct legs only: S3, the appcast and the summary are theirs.
           python3 - "$LEGS_JSON" > /tmp/legs.tsv <<'PY'
           import json, sys
           fields = ["leg", "id", "product-name", "s3-subpath", "appcast-filename",
                     "appcast-seed-path", "changelog-filename", "appcast"]
           for l in json.loads(sys.argv[1]):
-              print("\x1f".join(str(l.get(k, "")) for k in fields))
+              if l["channel"] == "direct":
+                  print("\x1f".join(str(l.get(k, "")) for k in fields))
           PY
           echo "Legs:"; tr '\037' '\t' < /tmp/legs.tsv
 
@@ -286,16 +404,17 @@ jobs:
           # actions/download-artifact extracts a LONE matched artifact flat into
           # the base path (no per-artifact subdir); multiple matches DO get subdirs
           # (merge-multiple defaults false). Re-nest a flattened artifact so the
-          # per-leg globs below can always assume artifacts/mac-direct/<name>/ —
-          # otherwise a single-leg release finds "no DMG".
-          while IFS=$'\x1f' read -r leg _; do
-            base="./artifacts/mac-direct"; want="$base/mac-direct-build-$leg"
-            if [ -d "$base" ] && [ ! -d "$want" ] && [ -n "$(find "$base" -maxdepth 1 -type f 2>/dev/null)" ]; then
-              mkdir -p "$want"
-              find "$base" -maxdepth 1 -type f -exec mv {} "$want"/ \;
-              echo "re-nested flattened artifact → $want/"
-            fi
-          done < /tmp/legs.tsv
+          # per-leg globs below can always assume artifacts/<kind>/<kind>-build-<leg>/
+          # — otherwise a single-leg release finds "no DMG / No .ipa / no .pkg".
+          python3 -c 'import json, sys; print("\n".join(l["build"] + " " + l["leg"] for l in json.loads(sys.argv[1])))' "$LEGS_JSON" |
+            while read -r kind leg; do
+              base="./artifacts/$kind"; want="$base/$kind-build-$leg"
+              if [ -d "$base" ] && [ ! -d "$want" ] && [ -n "$(find "$base" -maxdepth 1 -type f 2>/dev/null)" ]; then
+                mkdir -p "$want"
+                find "$base" -maxdepth 1 -type f -exec mv {} "$want"/ \;
+                echo "re-nested flattened $kind artifact → $want/"
+              fi
+            done
 
       # ── Release notes from the target product's inline changelog ──────────
       - name: Read release notes from the product changelog
@@ -306,7 +425,22 @@ jobs:
             .shared-ci/.github/scripts/changelog-from-json.sh > /tmp/notes.md || : > /tmp/notes.md
           echo "Notes ($(wc -c < /tmp/notes.md) bytes):"; cat /tmp/notes.md
 
+      # ── GATE 1: TestFlight upload (every app-store leg, iPhone and Mac) ───
+      # First, so a rejected upload stops the release before Direct moves.
+      - name: Upload to TestFlight (per app-store leg)
+        if: needs.build-ios.result == 'success' || needs.build-mac-store.result == 'success'
+        shell: bash
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_BASE64: ${{ secrets.ASC_KEY_BASE64 }}
+          ASC_KEY_ID_ALT: ${{ secrets.ASC_KEY_ID_ALT }}
+          ASC_ISSUER_ID_ALT: ${{ secrets.ASC_ISSUER_ID_ALT }}
+          ASC_KEY_ALT_BASE64: ${{ secrets.ASC_KEY_ALT_BASE64 }}
+        run: .shared-ci/.github/scripts/testflight-upload.sh
+
       - name: Install AWS CLI
+        if: needs.build-mac-direct.result == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -318,6 +452,7 @@ jobs:
           aws --version
 
       - name: Upload DMG + ZIP to S3
+        if: needs.build-mac-direct.result == 'success'
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -339,6 +474,7 @@ jobs:
 
       # ── Changelog.json → S3, extracted from the product's inline changelog ─
       - name: Upload Changelog.json to S3
+        if: needs.build-mac-direct.result == 'success'
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -429,6 +565,7 @@ jobs:
           done < /tmp/legs.tsv
 
       # ── FINAL: GitHub Release for the tag ──────────────────────────────────
+      # Every release gets one. Without a Direct leg it has notes and no assets.
       - name: Create GitHub Release
         if: ${{ !inputs.appcast-downloads-from-github }}
         shell: bash
@@ -456,13 +593,17 @@ jobs:
             echo
             echo "**Product:** \`${TARGET_ID}\` · **Version:** \`${VERSION}\` · **Build:** \`${BUILD_NUMBER}\`"
             echo
-            echo "| Artifact | Download |"
-            echo "|---|---|"
+            [ ! -s /tmp/legs.tsv ] || { echo "| Artifact | Download |"; echo "|---|---|"; }
             while IFS=$'\x1f' read -r leg id pname sub afile aseed clfile acast; do
               BASE="${S3_DOWNLOAD_URL}${sub:+/$sub}"
               echo "| DMG | [${pname}_${ARTIFACT_LABEL}.dmg](${BASE}/${pname}_${ARTIFACT_LABEL}.dmg) |"
               echo "| ZIP | [${pname}_${ARTIFACT_LABEL}.zip](${BASE}/${pname}_${ARTIFACT_LABEL}.zip) |"
             done < /tmp/legs.tsv
+            STORE=$(python3 -c 'import json, sys; print(", ".join(l["platform"] for l in json.loads(sys.argv[1]) if l["channel"] == "app-store" and l["distribute"]))' "$LEGS_JSON")
+            if [ -n "$STORE" ]; then
+              echo
+              echo "**App Store (${STORE}):** build \`${BUILD_NUMBER}\` from this tag is in TestFlight. In App Store Connect, add it to version \`${VERSION}\` and submit it for review."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cleanup
@@ -470,3 +611,4 @@ jobs:
         shell: bash
         run: |
           rm -rf /tmp/sparkle /tmp/sparkle.tar.xz /tmp/appcast-* /tmp/notes.md /tmp/cl-*.json /tmp/legs.tsv
+          rm -f ~/.appstoreconnect/private_keys/AuthKey_*.p8

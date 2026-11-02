@@ -3,12 +3,13 @@
 # INDEPENDENTLY via its own version tag: bare `vX.Y.Z` for the primary product
 # (the one without an "id"), `<id>-vX.Y.Z` for the others. The orchestrator
 # parses the tag → the product, validates the version against that product's
-# inline changelog, and builds + publishes its Direct leg: stable DMG, Sparkle
-# stable feed, Changelog.json, GitHub release.
+# inline changelog, and builds + publishes its Direct leg (stable DMG, Sparkle
+# stable feed, Changelog.json) and its App Store legs (TestFlight), from one
+# commit with one build number, plus a GitHub release. Submit that build in App
+# Store Connect. The tag also stops further builds of that version.
 #
-# App Store legs build nothing here: you submit the build you tested in
-# TestFlight in App Store Connect. For a product without a Direct leg, the tag
-# is just the marker of what shipped (and stops further builds of that version).
+# Ad Hoc legs go live on every push, so a product with nothing else builds
+# nothing here and needs no such shell.
 # ─────────────────────────────────────────────────────────────────────────────
 name: Distribute Release
 
@@ -26,12 +27,16 @@ permissions:
 
 jobs:
   release:
-    uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.8
     secrets:
-      DEVELOPER_ID_P12_BASE64:        ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+      APPLE_DISTR_P12_BASE64:         ${{ secrets.APPLE_DISTR_P12_BASE64 }}   # App Store legs
+      APPLE_DISTR_PASSWORD:           ${{ secrets.APPLE_DISTR_PASSWORD }}
+      MAC_DISTR_P12_BASE64:           ${{ secrets.MAC_DISTR_P12_BASE64 }}     # Mac App Store legs (.pkg)
+      MAC_DISTR_PASSWORD:             ${{ secrets.MAC_DISTR_PASSWORD }}
+      DEVELOPER_ID_P12_BASE64:        ${{ secrets.DEVELOPER_ID_P12_BASE64 }}  # Direct legs
       DEVELOPER_ID_PASSWORD:          ${{ secrets.DEVELOPER_ID_PASSWORD }}
       KEYCHAIN_PASSWORD:              ${{ secrets.KEYCHAIN_PASSWORD }}
-      ASC_KEY_ID:                     ${{ secrets.ASC_KEY_ID }}               # profiles, notarization
+      ASC_KEY_ID:                     ${{ secrets.ASC_KEY_ID }}               # profiles, uploads, notarization
       ASC_ISSUER_ID:                  ${{ secrets.ASC_ISSUER_ID }}
       ASC_KEY_BASE64:                 ${{ secrets.ASC_KEY_BASE64 }}
       AWS_ACCESS_KEY_ID:              ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -46,6 +51,8 @@ jobs:
     # with:
     #   use-tuist: true
     #   runs-on-build-mac-direct: '"macos-26"'  # runners default to self-hosted macOS; override to hosted (or a specific runner) here
+    #   runs-on-build-mac-store: '"macos-26"'   # the App Store archive needs a released Xcode
+    #   runs-on-build-ios: '"macos-26"'
     #   create-discussion: true          # opt-in; needs Discussions + the exact category
     #   attach-release-assets: false     # skip GitHub-Release asset upload (S3 keeps the DMG/ZIP) — saves budget
     #   appcast-downloads-from-github: true  # new Sparkle items download from the GitHub Release, not S3; public repos (README). Set it in the distribute shell too

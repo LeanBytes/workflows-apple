@@ -27,7 +27,7 @@
 #     workflow_dispatch:
 #   jobs:
 #     alpha:
-#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-alpha.yml@v0.6.7
+#       uses: LeanBytes/workflows-apple/.github/workflows/distribute-alpha.yml@v0.6.8
 #       secrets:
 #         # … the same block as distribute.yml, minus Sparkle and Jira
 # ─────────────────────────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.ios-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-ios.yml@v0.6.8
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -233,7 +233,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-store-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-store.yml@v0.6.8
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -271,7 +271,7 @@ jobs:
       fail-fast: false
       matrix:
         leg: ${{ fromJSON(needs.prepare.outputs.mac-direct-legs) }}
-    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.7
+    uses: LeanBytes/workflows-apple/.github/workflows/_build-mac-direct.yml@v0.6.8
     with:
       post-build-script: ${{ inputs.post-build-script }}
       job-timeout-minutes: ${{ inputs.build-timeout-minutes }}
@@ -400,40 +400,7 @@ jobs:
           ASC_KEY_ID_ALT: ${{ secrets.ASC_KEY_ID_ALT }}
           ASC_ISSUER_ID_ALT: ${{ secrets.ASC_ISSUER_ID_ALT }}
           ASC_KEY_ALT_BASE64: ${{ secrets.ASC_KEY_ALT_BASE64 }}
-        run: |
-          set -uo pipefail
-          source .shared-ci/.github/scripts/classify-upload.sh
-          # altool reads the keys from here; Cleanup removes them. A leg with
-          # "asc-key": "alt" uploads with the *_ALT key, into that team's app.
-          mkdir -p ~/.appstoreconnect/private_keys
-          [ -z "$ASC_KEY_ID" ] || (umask 077; echo "$ASC_KEY_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8)
-          [ -z "$ASC_KEY_ID_ALT" ] || (umask 077; echo "$ASC_KEY_ALT_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID_ALT}.p8)
-          ALT_LEGS=" $(python3 -c 'import json, sys; print(" ".join(l["leg"] for l in json.loads(sys.argv[1]) if l.get("asc-key") == "alt"))' "$LEGS_JSON") "
-          while IFS=$'\x1f' read -r leg id pname plat chan dist bid sub kind; do
-            [ "$chan" = "app-store" ] || continue
-            [ "$dist" = "True" ] || { echo "leg $leg: distribute=false — skipping upload"; continue; }
-            echo "::group::TestFlight upload — $leg"
-            if [[ "$ALT_LEGS" == *" $leg "* ]]; then KEY=$ASC_KEY_ID_ALT; ISSUER=$ASC_ISSUER_ID_ALT; else KEY=$ASC_KEY_ID; ISSUER=$ASC_ISSUER_ID; fi
-            if [ -z "$KEY" ]; then
-              echo "::error::No App Store Connect key for leg $leg"; echo "::endgroup::"; exit 1
-            fi
-            case "$plat" in ios) ext=ipa; type=ios ;; tvos) ext=ipa; type=appletvos ;; *) ext=pkg; type=macos ;; esac
-            FILE=$(ls ./artifacts/$kind/$kind-build-$leg/*.$ext 2>/dev/null | head -1 || true)
-            if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
-              echo "::error::No .$ext for leg $leg"; echo "::endgroup::"; exit 1
-            fi
-            set +e
-            OUTPUT=$(xcrun altool --upload-app --type "$type" --file "$FILE" \
-              --apiKey "$KEY" --apiIssuer "$ISSUER" 2>&1)
-            RC=$?
-            set -e
-            echo "$OUTPUT"
-            case "$(classify_upload "$RC" "$OUTPUT")" in
-              accepted)        echo "TestFlight upload accepted for $leg"; echo "::endgroup::"; continue ;;
-              already-present) echo "Build for $leg already present — treating as success."; echo "::endgroup::"; continue ;;
-            esac
-            echo "::error::altool failed for $leg (exit ${RC})"; echo "::endgroup::"; exit 1
-          done < /tmp/legs.tsv
+        run: .shared-ci/.github/scripts/testflight-upload.sh
 
       - name: Install AWS CLI
         if: needs.build-mac-direct.result == 'success' || contains(needs.prepare.outputs.ios-legs, '"channel":"ad-hoc"')

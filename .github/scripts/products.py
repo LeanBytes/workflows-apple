@@ -45,14 +45,17 @@ Subcommands:
                      counter is what Direct users see, so it stays.
                    * without one, since SINCE: the commit the last successful
                      run of the workflow built from. App Store and Ad Hoc builds
-                     get no tags (a tag marks a build that reaches customers on
+                     get no -beta.N tags (one marks a build that reaches customers on
                      its own, and a TestFlight upload doesn't), and the last good
                      run takes the tag's place: a failed run, a [skip ci] push or
                      a queued run GitHub dropped for a newer one is picked up by
                      the next run instead of being lost.
-  plan-release   A pushed `<prefix><version>` tag -> that product's Direct leg.
-                 App Store legs build nothing: the build tested in TestFlight is
-                 the one you submit.
+  plan-release   A pushed `<prefix><version>` tag -> that product's Direct and
+                 App Store legs, from one commit with one build number. The tag
+                 is the release, whatever the product ships through: you submit
+                 the tag's build, so a version can't ship without its tag, and it
+                 and the build Sparkle users get were made together. Ad Hoc legs
+                 go live on every push, so they have no release moment.
   plan-alpha     A manual alpha of one product, from any branch -> every leg.
                  App Store legs go to TestFlight as internal-only builds; a
                  product with a Direct leg is tagged `-alpha.N`.
@@ -547,11 +550,11 @@ def cmd_plan_release(products_dir):
     if ver != r["_version"]:
         die(f"tag '{tag}' (={ver}) != Config/products/{r['_file']} changelog.versions[0].version (={r['_version']}). Bump the changelog or fix the tag.")
 
-    direct = [l for l in r["_legs"] if l["channel"] == "direct"]
-    if not direct:
-        note(f"{r['id']}: no Direct leg — the tag marks the release, and nothing is built. "
-             f"Submit the build you tested in TestFlight in App Store Connect.")
-    row, legs = cut(r, direct, ver, f"v{ver}", ver, tag)
+    builds = [l for l in r["_legs"] if l["channel"] in ("direct", "app-store")]
+    if not builds:
+        note(f"{r['id']}: only Ad Hoc legs, which go live on every push — the tag marks "
+             f"the version, and nothing is built.")
+    row, legs = cut(r, builds, ver, f"v{ver}", ver, tag)
     emit("target-id", r["id"])
     emit("version", ver)
     emit("artifact-label", f"v{ver}")

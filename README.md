@@ -6,9 +6,11 @@ Reusable GitHub Actions workflows for Apple app distribution: **iPhone and iPad*
 
 Adding a new app means: dropping one `Config/products/<id>.json` per product in your repo, setting the team's secrets once (certificates + one App Store Connect key) plus two S3 vars, creating one provisioning profile per bundle ID in the developer portal, and copying four **trigger-only** shell workflows into `.github/workflows/` (they *discover* your products — no `products` input). No build/sign/notarize/upload code lives in the consumer repo, and no provisioning profile is ever stored in GitHub.
 
-> **Moved in v0.6.5:** this repo used to be `LeanBytes/workflows-macos`. GitHub doesn't forward `uses:` lines to a renamed repo, so this is a new repo, not a rename. In your shells, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.7`; nothing else changes. Tags up to v0.6.4 and the v0.5.x fixes stay in workflows-macos and keep working.
+> **Moved in v0.6.5:** this repo used to be `LeanBytes/workflows-macos`. GitHub doesn't forward `uses:` lines to a renamed repo, so this is a new repo, not a rename. In your shells, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.8`; nothing else changes. Tags up to v0.6.4 and the v0.5.x fixes stay in workflows-macos and keep working.
 
 > **v0.6.0 (breaking):** iOS joined (it used to live in `LeanBytes/workflows-ios`), the product file names its platforms, profiles come from App Store Connect, `distribute-beta.yml` became `distribute.yml`, and App Store builds no longer get tags. See [MIGRATING.md](MIGRATING.md) for every path from v0.3, v0.4, v0.5 and workflows-ios. Pin v0.6.5, never v0.6.0: until v0.6.1 (and v0.5.10), every tag checked out main's shared scripts instead of its own (#34), and until v0.6.2 (and v0.5.11) no Tuist install honored the app's pin (#39).
+
+> **v0.6.8 (breaking for every product with an App Store leg):** the tag is the release for every product. It builds the App Store legs again, so the `distribute-release.yml` shell needs the App Store certificates and runners, and you submit the tag's build. See [MIGRATING.md](MIGRATING.md#from-workflows-apple-v06).
 
 ## Architecture
 
@@ -23,8 +25,8 @@ distribute.yml             ──→   distribute.yml                          �
   + manual "force"                  one job per callee) → publish         ├──→   .ipa (App Store, Ad Hoc)
                                                                           │
 distribute-release.yml     ──→   distribute-release.yml                  │    _build-mac-store.yml
-  on: push tags v* / <id>-v*        prepare (plan-release) → Direct leg   ├──→   .pkg (Mac App Store)
-                                    → publish-release                     │
+  on: push tags v* / <id>-v*        prepare (plan-release) → Direct and   ├──→   .pkg (Mac App Store)
+                                    App Store legs → publish-release      │
 distribute-alpha.yml       ──→   distribute-alpha.yml                    │    _build-mac-direct.yml
   on: workflow_dispatch             prepare (plan-alpha) → every leg      ┘      notarized DMG + ZIP
                                     → publish-alpha (private)
@@ -74,11 +76,11 @@ Each product is one **`Config/products/<id>.json`** in your app repo — its bui
 
 **Optional `issues` field.** Each item may carry an `"issues"` **array of strings** — the Jira keys (`"MP-417"`) and/or GitHub issues (`"#98"`) the change traces back to. It's pure provenance: the pipeline and the app's What's New view **ignore** it.
 
-**Tags mark ship moments — of builds that reach customers on their own.** The **primary** product — the one that omits `id` — uses **bare `v*`** tags; every other product is prefixed `<id>-v*`. The prefix is a git/CI identifier only; `CFBundleShortVersionString` is always the bare `X.Y.Z`. At most one product per repo may omit `id`.
-- `vX.Y.Z` / `<id>-vX.Y.Z` — the release. You push it by hand; CI validates it against that product's `changelog.versions[0].version`, builds the Direct leg (if there is one) for the stable Sparkle feed, and from then on builds nothing more of that version.
+**Tags mark ship moments.** The **primary** product — the one that omits `id` — uses **bare `v*`** tags; every other product is prefixed `<id>-v*`. The prefix is a git/CI identifier only; `CFBundleShortVersionString` is always the bare `X.Y.Z`. At most one product per repo may omit `id`.
+- `vX.Y.Z` / `<id>-vX.Y.Z` — the release, for **every** product: a version belongs to the software, not to a channel. You push it by hand; CI validates it against that product's `changelog.versions[0].version`, builds the Direct leg for the stable Sparkle feed and the App Store legs for TestFlight, from one commit with one build number, creates the GitHub Release, and from then on builds nothing more of that version.
 - `vX.Y.Z-beta.N` / `<id>-vX.Y.Z-beta.N` — the Nth Direct beta, auto-pushed on push→main. **Only a product with a Direct leg gets these**: a Direct beta reaches customers by itself, through the Sparkle beta feed.
 - `vX.Y.Z-alpha.N` / `<id>-vX.Y.Z-alpha.N` — a manual alpha of a product with a Direct leg.
-- **App Store and Ad Hoc builds get no tag.** TestFlight has no alpha/beta/release stages: every upload reaches your internal testers, and sending a build to external testers or the App Store is your choice per build in App Store Connect. The build you tested is the one you submit; nothing is rebuilt on the version tag.
+- **App Store and Ad Hoc pushes get no tag.** TestFlight has no alpha/beta/release stages: every upload reaches your internal testers, and sending a build to external testers or the App Store is your choice per build in App Store Connect. The version tag builds the App Store legs once more, and that's the build you submit. So a version can't ship without its tag, and the build you submit and the build Sparkle users get were made together, however long after the last beta you release.
 
 **Marketing version per channel** (Apple's iTMS rejects non-`N.N.N` strings in `CFBundleShortVersionString`, so we split):
 - **Direct / Sparkle:** `<next>-beta.<N>` for betas (e.g. `2.12.0-beta.4`), bare `<next>` for releases.
@@ -239,7 +241,7 @@ Copy from [`examples/per-app/`](examples/per-app/) — the same files serve ever
 - `distribute-release.yml` — your version tag.
 - `distribute-alpha.yml` — by hand, from any branch.
 
-Pin the `uses:` line to a tag (`@v0.6.7`), not `@main`. Uncomment per-app inputs as needed.
+Pin the `uses:` line to a tag (`@v0.6.8`), not `@main`. Uncomment per-app inputs as needed.
 
 **On secret passing.** GitHub Actions' `secrets: inherit` only crosses repository boundaries *within the same org/enterprise*, and it hands the shared workflow every secret the repo can see. The example shells list each secret explicitly, which works in every configuration and passes only what is used. Keep that block as-is.
 
@@ -257,7 +259,9 @@ on:
       - '!*-alpha.*'
 ```
 
-For a product without a Direct leg, the release run only checks the tag and builds nothing — submit the build you tested in App Store Connect.
+The release run builds the product's Direct leg and every App Store leg, so the shell passes the App Store certificates and runner inputs too. The upload comes first, and a rejected upload stops the release before anything Direct moves. Then submit that build in App Store Connect: the run summary names it, and a Direct release carries the same build number. Because the tag closes the version, a fix for a rejected review ships as the next version.
+
+Without a Direct leg, the run ends with a GitHub Release that has notes and no assets. A product with only Ad Hoc legs builds nothing on its tag.
 
 **GH (pre-)release titles + assets.** The title matches the tag. By default a Direct build's DMG + ZIP are attached to its release; set **`attach-release-assets: false`** to skip that and **save GitHub storage/bandwidth** — the DMG/ZIP still go to S3 (where the appcast points).
 
@@ -310,7 +314,7 @@ The cache step runs first (restores the file if previously cached under that key
 
 ## Migrating
 
-[MIGRATING.md](MIGRATING.md) takes an app to v0.6.7 from `LeanBytes/workflows-macos` v0.6.x (a new address only), v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
+[MIGRATING.md](MIGRATING.md) takes an app to v0.6.8 from `LeanBytes/workflows-macos` v0.6.x (a new address only), v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
 
 - every retired product-file key and shell input, with its replacement
 - before and after files for a Direct + App Store app with extensions
@@ -321,6 +325,7 @@ The cache step runs first (restores the file if previously cached under that key
 - the `mise.toml` pin a Tuist app needs
 - a Direct app that keeps an old team's certificate after its App ID moved to another team
 - Sparkle updates served from GitHub Releases instead of S3
+- what v0.6.8 adds to a release shell, and how shipping to the App Store changes
 
 ## Local builds (no CI)
 
@@ -369,7 +374,7 @@ codesign --verify --deep --strict --verbose=4 /tmp/verify/<PRODUCT_NAME>.app
 6. per Direct product: git push <prefix><ver>-beta.N + gh release create --prerelease
 ```
 
-`distribute-release.yml` does steps 1, 4, the product's `Changelog.json` to S3, the stable appcast, and the GitHub Release last. The appcast update is the "go-live" moment for Sparkle clients; the GH (pre-)release is created last. A failure anywhere short-circuits the rest, so you never end up with a half-published version — and a build job that failed or was cancelled stops the publish job altogether.
+`distribute-release.yml` does steps 1, 2, 4, the product's `Changelog.json` to S3, the stable appcast, and the GitHub Release last. The appcast update is the "go-live" moment for Sparkle clients; the GH (pre-)release is created last. A failure anywhere short-circuits the rest, so you never end up with a half-published version — and a build job that failed or was cancelled stops the publish job altogether.
 
 With **`appcast-downloads-from-github`** the new appcast item points at the GitHub (pre-)release, so that comes first, in both workflows:
 
@@ -414,10 +419,10 @@ Results render on the **run page** via `$GITHUB_STEP_SUMMARY` (per-runner pass/f
 Pin caller `uses:` to a tag, not `@main`:
 
 ```yaml
-uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.7
+uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.8
 ```
 
-Patch versions are the usual working unit — every workflow change ships under a new tag, and cross-callouts inside this repo plus `examples/per-app/` are bumped to that tag as part of the same commit. **`v0.6.0` is a breaking change** (see [Migrating](MIGRATING.md)); so was `v0.4.0`, which moved product identity + changelog into `Config/products/<id>.json`. Tags up to v0.6.4 live in `LeanBytes/workflows-macos`, the repo's old address, and fixes for v0.5.x callers still land there, on its `maint-v0.5` branch.
+Patch versions are the usual working unit — every workflow change ships under a new tag, and cross-callouts inside this repo plus `examples/per-app/` are bumped to that tag as part of the same commit. **`v0.6.8` is a breaking change** for a product with an App Store leg (see [Migrating](MIGRATING.md)); so were `v0.6.0` and `v0.4.0`, the last of which moved product identity + changelog into `Config/products/<id>.json`. Tags up to v0.6.4 live in `LeanBytes/workflows-macos`, the repo's old address, and fixes for v0.5.x callers still land there, on its `maint-v0.5` branch.
 
 ## Repo layout
 
@@ -426,7 +431,7 @@ Patch versions are the usual working unit — every workflow change ships under 
   workflows/
     distribute-pr.yml          ← orchestrator: PR compile of every leg
     distribute.yml             ← orchestrator: push to main
-    distribute-release.yml     ← orchestrator: version tag (Direct release)
+    distribute-release.yml     ← orchestrator: version tag (Direct and App Store legs)
     distribute-alpha.yml       ← orchestrator: manual private alpha
     _build-ios.yml             ← callee: iPhone/iPad .ipa (App Store, Ad Hoc), Apple TV .ipa (App Store)
     _build-mac-store.yml       ← callee: Mac App Store .pkg
@@ -439,6 +444,7 @@ Patch versions are the usual working unit — every workflow change ships under 
     profiles.py                ← provisioning profiles from App Store Connect: fetch, archive args, ExportOptions
     build-direct.sh            ← shared Direct build core (CI + local both run this)
     github-release.sh          ← a Direct build's GitHub (pre-)release, and the check that GitHub serves its ZIP
+    testflight-upload.sh       ← every app-store leg to App Store Connect
     classify-upload.sh         ← one definition of "did the altool upload land?"
     manifest.sh                ← the Ad Hoc itms-services manifest
     changelog-from-json.sh     ← render Markdown notes from a product's inline .changelog
