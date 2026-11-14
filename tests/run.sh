@@ -1118,5 +1118,27 @@ tf ALTOOL_RC=31 ALTOOL_SAYS="value that has already been used (-19232)" LEGS_JSO
 cd "$ROOT" || exit 1
 rm -rf "$T"
 
+echo "== build-direct.sh verify-packages: a DMG that won't attach at once =="
+BD="$ROOT/.github/scripts/build-direct.sh"
+T=$(mktemp -d); mkdir -p "$T/bin" "$T/out" "$T/tmp"
+: > "$T/out/App_v1.dmg"; : > "$T/out/App_v1.zip"
+cat > "$T/bin/hdiutil" <<'SH'
+#!/bin/sh
+echo "hdiutil $1" >> "$STUB_LOG"
+[ "$1" != attach ] || [ "$(grep -c '^hdiutil attach' "$STUB_LOG")" -gt "$ATTACH_FAILS" ]
+SH
+printf '#!/bin/sh\necho "$(basename "$0") $*" >> "$STUB_LOG"\n' > "$T/bin/spctl"
+for c in codesign ditto sleep; do cp "$T/bin/spctl" "$T/bin/$c"; done
+chmod +x "$T/bin/"*
+bd() { : > "$T/log"; CAP PATH="$T/bin:$PATH" TMPDIR="$T/tmp" STUB_LOG="$T/log" WORK_DIR="$T/work" OUTPUT_DIR="$T/out" PRODUCT_NAME=App ARTIFACT_LABEL=v1 "$@" bash "$BD" verify-packages; }
+attaches() { grep -c '^hdiutil attach' "$T/log"; }
+bd ATTACH_FAILS=2
+{ [ "$RC" -eq 0 ] && [ "$(attaches)" -eq 3 ] && grep -q '^hdiutil detach' "$T/log"; } \
+  && pass "an attach that fails twice mounts on the third try" || bad "attach retry: $(attaches) attaches"
+bd ATTACH_FAILS=9
+{ [ "$RC" -ne 0 ] && [ "$(attaches)" -eq 5 ] && grep -qF '::error::hdiutil attach failed 5 times' <<<"$OUT"; } \
+  && pass "an attach that keeps failing fails the build after 5 tries" || bad "attach give-up: $(attaches) attaches"
+rm -rf "$T"
+
 echo
 [ $FAIL -eq 0 ] && echo "ALL TESTS PASSED ✅" || { echo "SOME TESTS FAILED ❌"; exit 1; }

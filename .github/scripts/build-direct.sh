@@ -394,14 +394,22 @@ phase_verify_packages() {
   local app_name="${PRODUCT_NAME}.app"
 
   if [ -z "${NO_DMG:-}" ]; then
-    local mount rc=0
+    local mount attempt rc=0
     # Attach at a private mktemp mountpoint — NEVER parse the default /Volumes/<name> out of the attach
     # output. When any leftover claims the volume name, macOS mounts at "/Volumes/<name> 1" and the old
     # `awk END{print $NF}` parse returned the bare "1" (a space-split fragment), so codesign/spctl ran
     # against a nonexistent relative path and every verify failed ("invalid API object reference"). A
     # unique mountpoint is immune to duplicates, spaces, and output-format drift (issue #1).
     mount=$(mktemp -d)
-    hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$DMG_PATH" > /dev/null
+    # Right after `package` made the DMG, attach now and then fails with "Resource temporarily
+    # unavailable" (sarensw/MacPacker run 43579904397, 1.6 s after hdiutil create). It's transient,
+    # so try 5 times, 50 s at most, before failing the build.
+    for attempt in 1 2 3 4 5; do
+      hdiutil attach -nobrowse -readonly -mountpoint "$mount" "$DMG_PATH" > /dev/null && break
+      [ "$attempt" -lt 5 ] || { echo "::error::hdiutil attach failed $attempt times"; exit 1; }
+      echo "Retrying in $((attempt * 5)) s"
+      sleep $((attempt * 5))
+    done
     spctl --assess --type execute --verbose=4 "$mount/$app_name" || rc=$?
     codesign --verify --deep --strict --verbose=4 "$mount/$app_name" || rc=$?
     # Detach even if a check failed; -force as fallback so a busy mount can't strand itself for the
