@@ -6,7 +6,7 @@ Reusable GitHub Actions workflows for Apple app distribution: **iPhone and iPad*
 
 Adding a new app means: dropping one `Config/products/<id>.json` per product in your repo, setting the team's secrets once (certificates + one App Store Connect key) plus two S3 vars, creating one provisioning profile per bundle ID in the developer portal, and copying four **trigger-only** shell workflows into `.github/workflows/` (they *discover* your products — no `products` input). No build/sign/notarize/upload code lives in the consumer repo, and no provisioning profile is ever stored in GitHub.
 
-> **Moved in v0.6.5:** this repo used to be `LeanBytes/workflows-macos`. GitHub doesn't forward `uses:` lines to a renamed repo, so this is a new repo, not a rename. In your shells, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.8`; nothing else changes. Tags up to v0.6.4 and the v0.5.x fixes stay in workflows-macos and keep working.
+> **Moved in v0.6.5:** this repo used to be `LeanBytes/workflows-macos`. GitHub doesn't forward `uses:` lines to a renamed repo, so this is a new repo, not a rename. In your shells, change `LeanBytes/workflows-macos` to `LeanBytes/workflows-apple` and the tag to `@v0.6.9`; nothing else changes. Tags up to v0.6.4 and the v0.5.x fixes stay in workflows-macos and keep working.
 
 > **v0.6.0 (breaking):** iOS joined (it used to live in `LeanBytes/workflows-ios`), the product file names its platforms, profiles come from App Store Connect, `distribute-beta.yml` became `distribute.yml`, and App Store builds no longer get tags. See [MIGRATING.md](MIGRATING.md) for every path from v0.3, v0.4, v0.5 and workflows-ios. Pin v0.6.5, never v0.6.0: until v0.6.1 (and v0.5.10), every tag checked out main's shared scripts instead of its own (#34), and until v0.6.2 (and v0.5.11) no Tuist install honored the app's pin (#39).
 
@@ -241,7 +241,7 @@ Copy from [`examples/per-app/`](examples/per-app/) — the same files serve ever
 - `distribute-release.yml` — your version tag.
 - `distribute-alpha.yml` — by hand, from any branch.
 
-Pin the `uses:` line to a tag (`@v0.6.8`), not `@main`. Uncomment per-app inputs as needed.
+Pin the `uses:` line to a tag (`@v0.6.9`), not `@main`. Uncomment per-app inputs as needed.
 
 **On secret passing.** GitHub Actions' `secrets: inherit` only crosses repository boundaries *within the same org/enterprise*, and it hands the shared workflow every secret the repo can see. The example shells list each secret explicitly, which works in every configuration and passes only what is used. Keep that block as-is.
 
@@ -314,7 +314,7 @@ The cache step runs first (restores the file if previously cached under that key
 
 ## Migrating
 
-[MIGRATING.md](MIGRATING.md) takes an app to v0.6.8 from `LeanBytes/workflows-macos` v0.6.x (a new address only), v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
+[MIGRATING.md](MIGRATING.md) takes an app to v0.6.9 from `LeanBytes/workflows-macos` v0.6.x (a new address only), v0.5.x, v0.4.x, v0.3.x or `LeanBytes/workflows-ios`. It covers:
 
 - every retired product-file key and shell input, with its replacement
 - before and after files for a Direct + App Store app with extensions
@@ -419,7 +419,7 @@ Results render on the **run page** via `$GITHUB_STEP_SUMMARY` (per-runner pass/f
 Pin caller `uses:` to a tag, not `@main`:
 
 ```yaml
-uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.8
+uses: LeanBytes/workflows-apple/.github/workflows/distribute.yml@v0.6.9
 ```
 
 Patch versions are the usual working unit — every workflow change ships under a new tag, and cross-callouts inside this repo plus `examples/per-app/` are bumped to that tag as part of the same commit. **`v0.6.8` is a breaking change** for a product with an App Store leg (see [Migrating](MIGRATING.md)); so were `v0.6.0` and `v0.4.0`, the last of which moved product identity + changelog into `Config/products/<id>.json`. Tags up to v0.6.4 live in `LeanBytes/workflows-macos`, the repo's old address, and fixes for v0.5.x callers still land there, on its `maint-v0.5` branch.

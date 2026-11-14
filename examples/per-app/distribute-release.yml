@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   release:
-    uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.8
+    uses: LeanBytes/workflows-apple/.github/workflows/distribute-release.yml@v0.6.9
     secrets:
       APPLE_DISTR_P12_BASE64:         ${{ secrets.APPLE_DISTR_P12_BASE64 }}   # App Store legs
       APPLE_DISTR_PASSWORD:           ${{ secrets.APPLE_DISTR_PASSWORD }}
