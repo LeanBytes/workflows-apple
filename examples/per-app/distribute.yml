@@ -54,6 +54,7 @@ jobs:
       ASC_KEY_BASE64:                 ${{ secrets.ASC_KEY_BASE64 }}
       AWS_ACCESS_KEY_ID:              ${{ secrets.AWS_ACCESS_KEY_ID }}        # Direct and Ad Hoc legs
       AWS_SECRET_ACCESS_KEY:          ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      ADHOC_UPLOAD_TOKEN:             ${{ secrets.ADHOC_UPLOAD_TOKEN }}       # Ad Hoc legs
       SPARKLE_ED_PRIVATE_KEY:         ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}   # a direct leg with "appcast": true
       # JIRA_API_TOKEN:               ${{ secrets.JIRA_API_TOKEN }}           # if run-tests
       # A leg in another Apple team names its certificate in "cert-secret" and

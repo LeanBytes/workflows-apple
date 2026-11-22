@@ -309,7 +309,7 @@ The old names are no longer read, so rename them or a job moves back to the shel
 - **The release tag builds the Direct leg and its App Store legs**, from one commit with one build number. The Direct leg gets the stable appcast, `Changelog.json` and the GitHub Release, and the App Store legs go to TestFlight first. You submit that build. See [From push to App Store review](#from-push-to-app-store-review).
 - **An alpha builds every leg of one product.**
   - `app-store` legs upload as internal-only TestFlight builds, which can't go to external testers or to review.
-  - Direct and Ad Hoc legs go to an unlisted `alpha/<label>/` S3 prefix.
+  - Direct legs go to an unlisted `alpha/<label>/` S3 prefix, Ad Hoc legs to the ad hoc page.
   - An `-alpha.N` tag is pushed only for a product with a Direct leg.
 - **A PR compiles every leg**, unsigned.
 - **Public repos keep build artifacts for one day.**
@@ -404,7 +404,7 @@ All other inputs keep their names.
 - **An Ad Hoc app now needs `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_BASE64`** (Admin): it downloads its profile even though it never uploads.
 
 **What stays:**
-- The Ad Hoc S3 location is unchanged (`<S3_DISTRIBUTION_PATH>/<bundle-id>/app.ipa` and `manifest.plist`), so existing install links keep working.
+- Ad Hoc builds no longer go to S3: they go to the ad hoc page (adhoc.sarensw.net, behind a login) as `<bundle-id>/app.ipa` and `manifest.plist`. Pass the `ADHOC_UPLOAD_TOKEN` secret, and run the publish job on a self-hosted Mac in the home LAN. Old `itms-services` links to S3 stop working; testers open adhoc.sarensw.net instead.
 - The bare `vX.Y.Z` release markers still stop a version from building.
 
 **What changes:** workflows-ios tagged every build. v0.6.9 writes no such tags and doesn't read the old ones. The first push after migrating builds, because it changes the product file.

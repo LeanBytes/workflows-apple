@@ -131,6 +131,7 @@ on:
       ASC_KEY_ALT_BASE64:             { required: false }
       AWS_ACCESS_KEY_ID:              { required: false }
       AWS_SECRET_ACCESS_KEY:          { required: false }
+      ADHOC_UPLOAD_TOKEN:             { required: false }
       SHARED_WORKFLOWS_TOKEN:         { required: false }
 
 permissions:
@@ -403,7 +404,7 @@ jobs:
         run: .shared-ci/.github/scripts/testflight-upload.sh
 
       - name: Install AWS CLI
-        if: needs.build-mac-direct.result == 'success' || contains(needs.prepare.outputs.ios-legs, '"channel":"ad-hoc"')
+        if: needs.build-mac-direct.result == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -414,8 +415,10 @@ jobs:
           fi
           aws --version
 
-      # Upload to an UNLISTED `alpha/<label>/` prefix — hand-out-the-URL only.
-      - name: Upload to S3 (unlisted alpha prefix, Direct + Ad Hoc)
+      # Direct: an UNLISTED `alpha/<label>/` S3 prefix — hand-out-the-URL only.
+      # Ad Hoc: `<bundle-id>/alpha/<label>/` on the ad hoc page (behind its
+      # login, uploaded over the home LAN; see distribute.yml).
+      - name: Upload alpha builds (Direct to S3, Ad Hoc to the ad hoc page)
         if: needs.build-mac-direct.result == 'success' || contains(needs.prepare.outputs.ios-legs, '"channel":"ad-hoc"')
         shell: bash
         env:
@@ -424,6 +427,9 @@ jobs:
           AWS_DEFAULT_REGION: "eu-central-1"
           S3_DISTRIBUTION_PATH: ${{ vars.S3_DISTRIBUTION_PATH }}
           S3_DOWNLOAD_URL: ${{ vars.S3_DOWNLOAD_URL }}
+          ADHOC_UPLOAD_TOKEN: ${{ secrets.ADHOC_UPLOAD_TOKEN }}
+          ADHOC_UPLOAD_URL: ${{ vars.ADHOC_UPLOAD_URL || 'http://192.168.178.84:8019' }}
+          ADHOC_PAGE_URL: ${{ vars.ADHOC_PAGE_URL || 'https://adhoc.sarensw.net' }}
         run: |
           set -euo pipefail
           while IFS=$'\x1f' read -r leg id pname plat chan dist bid sub kind; do
@@ -436,19 +442,17 @@ jobs:
                   echo "Uploaded $(basename "$f") → ${DEST}/"
                 done ;;
               ad-hoc)
-                [ "$dist" = "True" ] || { echo "leg $leg: distribute=false — no S3 upload"; continue; }
+                [ "$dist" = "True" ] || { echo "leg $leg: distribute=false — no upload"; continue; }
+                [ -n "${ADHOC_UPLOAD_TOKEN:-}" ] || { echo "::error::The Ad Hoc channel needs the ADHOC_UPLOAD_TOKEN secret."; exit 1; }
                 IPA=$(ls ./artifacts/ios/ios-build-$leg/*.ipa 2>/dev/null | head -1 || true)
                 [ -n "$IPA" ] || { echo "::error::No .ipa for leg $leg"; exit 1; }
-                DEST="${S3_DISTRIBUTION_PATH%/}/${bid}/alpha/${LABEL}"
-                BASE="${S3_DOWNLOAD_URL%/}/${bid}/alpha/${LABEL}"
+                DEST="${bid}/alpha/${LABEL}"
                 .shared-ci/.github/scripts/manifest.sh \
-                  "${BASE}/app.ipa" "$bid" "$BUILD_NUMBER" "$pname ${LABEL}" > "/tmp/manifest-$leg.plist"
+                  "${ADHOC_PAGE_URL%/}/ipa/${DEST}" "$bid" "$BUILD_NUMBER" "$pname ${LABEL}" > "/tmp/manifest-$leg.plist"
                 plutil -lint "/tmp/manifest-$leg.plist"
-                aws s3 cp "$IPA" "${DEST}/app.ipa" --content-type "application/octet-stream"
-                # text/xml is required: with S3's default application/octet-stream,
-                # iOS downloads the manifest but refuses to read it.
-                aws s3 cp "/tmp/manifest-$leg.plist" "${DEST}/manifest.plist" --content-type "text/xml"
-                echo "Install link: itms-services://?action=download-manifest&url=${BASE}/manifest.plist" ;;
+                .shared-ci/.github/scripts/adhoc-upload.sh "$IPA" "${DEST}/app.ipa"
+                .shared-ci/.github/scripts/adhoc-upload.sh "/tmp/manifest-$leg.plist" "${DEST}/manifest.plist"
+                echo "Live on ${ADHOC_PAGE_URL} (${DEST})" ;;
             esac
           done < /tmp/legs.tsv
 
@@ -485,7 +489,7 @@ jobs:
                   BASE="${S3_DOWNLOAD_URL}${sub:+/$sub}/alpha/${LABEL}"
                   where="[DMG](${BASE}/${pname}_${LABEL}.dmg) · [ZIP](${BASE}/${pname}_${LABEL}.zip)" ;;
                 ad-hoc)
-                  where="itms-services://?action=download-manifest&url=${S3_DOWNLOAD_URL%/}/${bid}/alpha/${LABEL}/manifest.plist" ;;
+                  where="[adhoc.sarensw.net](https://adhoc.sarensw.net), ${bid}/alpha/${LABEL}" ;;
                 *)
                   where="TestFlight, internal testers only" ;;
               esac

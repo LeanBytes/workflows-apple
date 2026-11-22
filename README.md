@@ -37,7 +37,7 @@ A product names its **platforms** and the **channels** each ships through; `prod
 | Platform | Channel | Built by | Lands in |
 |---|---|---|---|
 | `ios` (iPhone, iPad) | `app-store` | `_build-ios.yml` | TestFlight → you submit it in App Store Connect |
-| `ios` | `ad-hoc` | `_build-ios.yml` | IPA + manifest on S3, installed via `itms-services://` on registered devices |
+| `ios` | `ad-hoc` | `_build-ios.yml` | IPA + manifest on the ad hoc page (adhoc.sarensw.net, behind a login), installed via `itms-services://` on registered devices |
 | `tvos` (Apple TV) | `app-store` | `_build-ios.yml` | TestFlight → you submit it in App Store Connect |
 | `macos` | `app-store` | `_build-mac-store.yml` | TestFlight → you submit it in App Store Connect |
 | `macos` | `direct` | `_build-mac-direct.yml` | Notarized DMG/ZIP on S3, the Sparkle feed, a GitHub (pre-)release |
@@ -172,7 +172,8 @@ Set once per team — as **organization** secrets for repos in an org; a persona
 | `KEYCHAIN_PASSWORD` | Ephemeral build keychain password | all |
 | `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_BASE64` | App Store Connect API key (**Admin**) — downloads the profiles, uploads to TestFlight, notarizes | all |
 | `ASC_KEY_ID_ALT`, `ASC_ISSUER_ID_ALT`, `ASC_KEY_ALT_BASE64` | *(optional)* Another team's Admin key, for legs with `"asc-key": "alt"`; pass it in the shell | those legs |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | S3 upload credentials | `direct`, `ad-hoc` |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | S3 upload credentials | `direct` |
+| `ADHOC_UPLOAD_TOKEN` | Upload token of the ad hoc page's server (tarantula, home LAN; the publish job must run on a self-hosted Mac there) | `ad-hoc` |
 | `SPARKLE_ED_PRIVATE_KEY` | Sparkle EdDSA private key — one per app | `direct` with `"appcast": true` |
 | `JIRA_API_TOKEN` | Files a ticket when gated tests fail | if `run-tests` |
 
@@ -184,8 +185,9 @@ Only repo-level **infrastructure** lives in Variables.
 
 | Var | Purpose |
 |---|---|
-| `S3_DISTRIBUTION_PATH` | Full S3 URI for downloads, e.g. `s3://my-bucket/my-app` (Direct and Ad Hoc) |
-| `S3_DOWNLOAD_URL` | Public HTTPS base URL for the same path (download links; the Ad Hoc manifest needs it) |
+| `S3_DISTRIBUTION_PATH` | Full S3 URI for downloads, e.g. `s3://my-bucket/my-app` (Direct) |
+| `S3_DOWNLOAD_URL` | Public HTTPS base URL for the same path (download links) |
+| `ADHOC_UPLOAD_URL`, `ADHOC_PAGE_URL` | Optional: the ad hoc server's upload address (default `http://192.168.178.84:8019`) and its page (default `https://adhoc.sarensw.net`) |
 | `RUNS_ON_BUILD_IOS` | *(optional, temporary)* Override the runner for the iPhone/iPad and Apple TV archive — see below |
 | `RUNS_ON_BUILD_MAC_STORE` | *(optional, temporary)* Override the runner for the Mac App Store archive |
 | `RUNS_ON_BUILD_MAC_DIRECT` | *(optional, temporary)* Override the runner for the Developer ID archive |
@@ -274,7 +276,7 @@ Without a Direct leg, the run ends with a GitHub Release that has notes and no a
 
 **Alpha / invite builds (manual).** To hand a rough, early build to a hand-picked few — e.g. work on a `3.0` branch — run "Distribute Alpha" from the Actions tab on that branch. It builds every leg of the product, signed like a release:
 - **App Store legs** go to TestFlight as **internal-only** builds (`testFlightInternalTestingOnly`): App Store Connect keeps them from external testers and the App Store.
-- **Direct and Ad Hoc legs** go to an **unlisted `alpha/<label>/` prefix** on S3; the run summary prints the links. No appcast, no `Changelog.json`, no GitHub Release.
+- **Direct legs** go to an **unlisted `alpha/<label>/` prefix** on S3, **Ad Hoc legs** to `<bundle-id>/alpha/<label>/` on the ad hoc page; the run summary prints where. No appcast, no `Changelog.json`, no GitHub Release.
 - A product with a Direct leg is tagged `<prefix><base>-alpha.<N>` (`<base>` = its `changelog.versions[0].version` or the `version-base` input; `<N>` counted from existing alpha tags). **Exclude alpha tags from your release trigger** (shown above).
 - `product-id` may stay empty when the repo has one product. The shell must live on your **default branch** (for the "Run workflow" button) *and* on the branch you build.
 
@@ -368,7 +370,7 @@ codesign --verify --deep --strict --verbose=4 /tmp/verify/<PRODUCT_NAME>.app
 ```
 1. Render release notes from each product's inline .changelog
 2. (gate) altool → App Store Connect    every app-store leg with distribute (iPhone, Apple TV and Mac)
-3. aws s3 cp IPA + manifest.plist       every ad-hoc leg — live at once
+3. IPA + manifest.plist to the ad hoc page   every ad-hoc leg — live at once
 4. aws s3 cp DMG/ZIP                    every direct leg (silent — no Sparkle client polls these yet)
 5. (gate) beta appcast update           every direct leg with "appcast": true
 6. per Direct product: git push <prefix><ver>-beta.N + gh release create --prerelease
