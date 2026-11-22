@@ -55,6 +55,7 @@ jobs:
       ASC_KEY_BASE64:                 ${{ secrets.ASC_KEY_BASE64 }}
       AWS_ACCESS_KEY_ID:              ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY:          ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      ADHOC_UPLOAD_TOKEN:             ${{ secrets.ADHOC_UPLOAD_TOKEN }}       # Ad Hoc legs
       # A leg in another Apple team: the *_ALT lines from distribute.yml.
       # SHARED_WORKFLOWS_TOKEN:       ${{ secrets.SHARED_WORKFLOWS_TOKEN }}        # only if workflows-apple is a private fork
     with:

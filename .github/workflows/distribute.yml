@@ -190,6 +190,7 @@ on:
       ASC_KEY_ALT_BASE64:             { required: false }
       AWS_ACCESS_KEY_ID:              { required: false }
       AWS_SECRET_ACCESS_KEY:          { required: false }
+      ADHOC_UPLOAD_TOKEN:             { required: false }
       SPARKLE_ED_PRIVATE_KEY:         { required: false }
       JIRA_API_TOKEN:                 { required: false }
       SHARED_WORKFLOWS_TOKEN:         { required: false }
@@ -554,7 +555,7 @@ jobs:
         run: .shared-ci/.github/scripts/testflight-upload.sh
 
       - name: Install AWS CLI
-        if: needs.build-mac-direct.result == 'success' || contains(needs.prepare.outputs.ios-legs, '"channel":"ad-hoc"')
+        if: needs.build-mac-direct.result == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -565,45 +566,44 @@ jobs:
           fi
           aws --version
 
-      # ── Ad Hoc: IPA + manifest.plist to S3, live at once ──────────────────
+      # ── Ad Hoc: IPA + manifest.plist to adhoc.sarensw.net, live at once ──
       # Same standing as the altool upload: if it fails, nothing is tagged. The
-      # location is deliberately STABLE (<dist>/<bundle-id>/app.ipa), so the
-      # itms-services link on the install page stays the same across versions.
-      - name: Upload IPA + manifest to S3 (per ad-hoc leg)
+      # builds live on Stephan's own server (tarantula), not on S3: the page is
+      # behind a login (Cloudflare Access, an email list) and the upload goes
+      # over the home LAN, so the publish runner must be one of the self-hosted
+      # Macs there. The location is STABLE (<bundle-id>/app.ipa), so the Install
+      # button stays the same across versions. The server rewrites the IPA URL
+      # in the manifest to a signed one, so the URL written here is only a label.
+      - name: Upload IPA + manifest to the ad hoc page (per ad-hoc leg)
         if: contains(needs.prepare.outputs.ios-legs, '"channel":"ad-hoc"')
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: "eu-central-1"
-          S3_DISTRIBUTION_PATH: ${{ vars.S3_DISTRIBUTION_PATH }}
-          S3_DOWNLOAD_URL: ${{ vars.S3_DOWNLOAD_URL }}
+          ADHOC_UPLOAD_TOKEN: ${{ secrets.ADHOC_UPLOAD_TOKEN }}
+          ADHOC_UPLOAD_URL: ${{ vars.ADHOC_UPLOAD_URL || 'http://192.168.178.84:8019' }}
+          ADHOC_PAGE_URL: ${{ vars.ADHOC_PAGE_URL || 'https://adhoc.sarensw.net' }}
         run: |
           set -euo pipefail
           while IFS=$'\x1f' read -r leg id pname plat chan dist bid sub afile aseed acast label mkt kind; do
             [ "$chan" = "ad-hoc" ] || continue
-            [ "$dist" = "True" ] || { echo "leg $leg: distribute=false — no S3 upload"; continue; }
-            if [ -z "${S3_DISTRIBUTION_PATH:-}" ] || [ -z "${S3_DOWNLOAD_URL:-}" ]; then
-              echo "::error::The Ad Hoc channel needs the S3_DISTRIBUTION_PATH and S3_DOWNLOAD_URL variables."
+            [ "$dist" = "True" ] || { echo "leg $leg: distribute=false — no upload"; continue; }
+            if [ -z "${ADHOC_UPLOAD_TOKEN:-}" ]; then
+              echo "::error::The Ad Hoc channel needs the ADHOC_UPLOAD_TOKEN secret."
               exit 1
             fi
-            echo "::group::S3 upload (Ad Hoc) — $leg"
+            echo "::group::Ad Hoc upload — $leg"
             IPA=$(ls ./artifacts/ios/ios-build-$leg/*.ipa 2>/dev/null | head -1 || true)
             if [ -z "$IPA" ] || [ ! -f "$IPA" ]; then
               echo "::error::No .ipa for leg $leg"; echo "::endgroup::"; exit 1
             fi
-            DEST="${S3_DISTRIBUTION_PATH%/}/${bid}"
-            BASE="${S3_DOWNLOAD_URL%/}/${bid}"
             # The build number is the monotonic timestamp, which is what iOS
             # reads to recognise an update — not the marketing version.
             .shared-ci/.github/scripts/manifest.sh \
-              "${BASE}/app.ipa" "$bid" "$BUILD_NUMBER" "$pname" > "/tmp/manifest-$leg.plist"
+              "${ADHOC_PAGE_URL%/}/ipa/${bid}" "$bid" "$BUILD_NUMBER" "$pname" > "/tmp/manifest-$leg.plist"
             plutil -lint "/tmp/manifest-$leg.plist"
-            aws s3 cp "$IPA" "${DEST}/app.ipa" --content-type "application/octet-stream"
-            # text/xml is required: with S3's default application/octet-stream,
-            # iOS downloads the manifest but refuses to read it.
-            aws s3 cp "/tmp/manifest-$leg.plist" "${DEST}/manifest.plist" --content-type "text/xml"
-            echo "Install link: itms-services://?action=download-manifest&url=${BASE}/manifest.plist"
+            # IPA first, manifest last: the page shows a build once its manifest is there.
+            .shared-ci/.github/scripts/adhoc-upload.sh "$IPA" "${bid}/app.ipa"
+            .shared-ci/.github/scripts/adhoc-upload.sh "/tmp/manifest-$leg.plist" "${bid}/manifest.plist"
+            echo "Live on ${ADHOC_PAGE_URL}"
             echo "::endgroup::"
           done < /tmp/legs.tsv
 
@@ -728,7 +728,7 @@ jobs:
               elif [ "$dist" != "True" ]; then
                 where="built, not distributed"
               elif [ "$chan" = "ad-hoc" ]; then
-                where="Ad Hoc (S3), live"
+                where="Ad Hoc ([adhoc.sarensw.net](https://adhoc.sarensw.net)), live"
               else
                 where="TestFlight"; testflight=1
               fi
